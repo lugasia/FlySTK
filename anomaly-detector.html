@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIGINT Anomaly Detector — TAC Analysis</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --navy: #0a1628;
+            --card: #162038;
+            --card-border: #1e3a5f;
+            --accent: #3b82f6;
+            --red: #ef4444;
+            --orange: #f59e0b;
+            --yellow: #eab308;
+            --cyan: #06b6d4;
+            --green: #22c55e;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --sidebar-w: 340px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--navy);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        #sidebar {
+            width: var(--sidebar-w);
+            background: var(--card);
+            border-left: 1px solid var(--card-border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #sb-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--card-border);
+        }
+        #sb-header h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        #sb-header p {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+        #sb-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+        }
+        .sb-section {
+            margin-bottom: 20px;
+        }
+        .sb-section h3 {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Upload area */
+        #upload-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed var(--card-border);
+            border-radius: 8px;
+            padding: 24px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: rgba(59, 130, 246, 0.05);
+            margin-top: 12px;
+        }
+        #upload-area:hover {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        #upload-area svg {
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+        #upload-area span {
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+        #upload-area strong {
+            color: var(--accent);
+        }
+
+        /* Filters */
+        .field-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+        select, input[type="range"] {
+            width: 100%;
+            background: var(--navy);
+            border: 1px solid var(--card-border);
+            border-radius: 6px;
+            color: var(--text);
+            padding: 8px 12px;
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+        }
+        select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .range-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .range-wrap input {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        .range-val {
+            background: var(--accent);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            min-width: 36px;
+            text-align: center;
+        }
+
+        /* Legend */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
+            margin-bottom: 8px;
+        }
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        .legend-dot.red { background: var(--red); }
+        .legend-dot.orange { background: var(--orange); }
+        .legend-dot.yellow { background: var(--yellow); }
+
+        /* Stats bar */
+        #stats-bar {
+            padding: 12px 20px;
+            background: var(--navy);
+            border-top: 1px solid var(--card-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+        }
+        #stats-bar strong {
+            color: var(--accent);
+            font-size: 1.1rem;
+        }
+
+        /* Nav links */
+        #nav-links {
+            padding: 12px 20px;
+            border-top: 1px solid var(--card-border);
+            display: flex;
+            gap: 8px;
+        }
+        #nav-links a {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 10px;
+            background: var(--navy);
+            border: 1px solid var(--card-border);
+            border-radius: 6px;
+            color: var(--text);
+            text-decoration: none;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+        #nav-links a:hover {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        /* Main content */
+        #main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #map {
+            flex: 1;
+            background: var(--navy);
+        }
+
+        /* Empty state */
+        #empty-state {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--navy);
+        }
+        #empty-card {
+            text-align: center;
+            padding: 40px;
+        }
+        #empty-card .icon {
+            font-size: 4rem;
+            margin-bottom: 16px;
+        }
+        #empty-card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+        }
+        #empty-card p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        /* Data table */
+        #table-panel {
+            height: 250px;
+            background: var(--card);
+            border-top: 1px solid var(--card-border);
+            display: flex;
+            flex-direction: column;
+        }
+        #table-hdr {
+            padding: 10px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--card-border);
+            background: var(--navy);
+        }
+        #table-hdr strong {
+            color: var(--accent);
+        }
+        #table-scroll {
+            flex: 1;
+            overflow: auto;
+        }
+        #data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        #data-table th {
+            position: sticky;
+            top: 0;
+            background: var(--navy);
+            padding: 10px 12px;
+            text-align: center;
+            font-weight: 600;
+            color: var(--text-dim);
+            border-bottom: 1px solid var(--card-border);
+        }
+        #data-table td {
+            padding: 10px 12px;
+            text-align: center;
+            border-bottom: 1px solid var(--card-border);
+        }
+        #data-table tr:hover {
+            background: rgba(59, 130, 246, 0.1);
+            cursor: pointer;
+        }
+        .severity-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            color: white;
+        }
+        .severity-badge.high { background: var(--red); }
+        .severity-badge.medium { background: var(--orange); }
+        .severity-badge.low { background: var(--yellow); color: #333; }
+
+        /* Leaflet popup override */
+        .leaflet-popup-content-wrapper {
+            background: var(--card);
+            color: var(--text);
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            max-width: 360px;
+        }
+        .leaflet-popup-tip { background: var(--card); }
+        .leaflet-popup-content {
+            margin: 12px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            direction: rtl;
+            text-align: right;
+        }
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--card-border);
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+        }
+        .popup-eci {
+            background: var(--accent);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+        }
+        .popup-risk {
+            font-weight: 600;
+            font-size: 0.75rem;
+        }
+        .popup-risk.high { color: var(--red); }
+        .popup-risk.medium { color: var(--orange); }
+        .popup-risk.low { color: var(--yellow); }
+        .popup-tech {
+            background: var(--navy);
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            direction: ltr;
+            text-align: left;
+        }
+        .popup-tech div { margin-bottom: 3px; }
+        .popup-tech .label { color: var(--text-dim); }
+        .popup-tech .val-red { color: var(--red); font-weight: 600; }
+        .popup-intel {
+            border-top: 1px dashed var(--card-border);
+            padding-top: 10px;
+        }
+        .popup-intel-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .popup-intel-body {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-align: justify;
+        }
+        .popup-intel-body b { color: var(--text); }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside id="sidebar">
+    <div id="sb-header">
+        <h1>📡 SIGINT Anomaly Detector</h1>
+        <p>זיהוי תאים מחליפי TAC (חשד ל-IMSI Catcher)</p>
+        <label id="upload-area" for="file-input">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>גרור JSON או <strong>לחץ להעלאה</strong></span>
+        </label>
+        <input type="file" id="file-input" accept=".json" style="display:none;">
+    </div>
+
+    <div id="sb-body" class="hidden">
+        <div class="sb-section">
+            <h3>סינון</h3>
+
+            <label class="field-label">מדינה (MCC)</label>
+            <select id="mcc-filter">
+                <option value="all">הכל (Global)</option>
+            </select>
+
+            <label class="field-label">מינימום קפיצות TAC</label>
+            <div class="range-wrap">
+                <input type="range" id="tac-filter" min="2" max="15" value="2">
+                <span class="range-val" id="tac-value">2</span>
+            </div>
+        </div>
+
+        <div class="sb-section">
+            <h3>מקרא</h3>
+            <div class="legend-item">
+                <span class="legend-dot red"></span>
+                <span><strong>אדום:</strong> 8+ קפיצות — חשד גבוה ללוכד</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot orange"></span>
+                <span><strong>כתום:</strong> 5-7 קפיצות — אנומליה בינונית</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot yellow"></span>
+                <span><strong>צהוב:</strong> 2-4 קפיצות — עיוות רשת</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="stats-bar" class="hidden">
+        <div>מציג <strong id="stat-count">0</strong> תאים חשודים</div>
+    </div>
+
+    <div id="nav-links">
+        <a href="index.html">
+            <span class="material-icons" style="font-size:16px">map</span>
+            Signal Map
+        </a>
+        <a href="sql-builder.html">
+            <span class="material-icons" style="font-size:16px">polyline</span>
+            SQL Builder
+        </a>
+    </div>
+</aside>
+
+<!-- MAIN -->
+<main id="main">
+    <div id="empty-state">
+        <div id="empty-card">
+            <div class="icon">🔍</div>
+            <h2>SIGINT Anomaly Detector</h2>
+            <p>העלה קובץ JSON מ-ClickHouse כדי לנתח תאים מחליפי TAC</p>
+        </div>
+    </div>
+
+    <div id="map" class="hidden"></div>
+
+    <div id="table-panel" class="hidden">
+        <div id="table-hdr">
+            <div><strong id="table-count">0</strong> תאים</div>
+            <span style="color:var(--text-dim);font-size:0.75rem">לחץ על שורה → מעבר למיקום</span>
+        </div>
+        <div id="table-scroll">
+            <table id="data-table">
+                <thead>
+                    <tr>
+                        <th>ECI</th>
+                        <th>MCC/MNC</th>
+                        <th>מפעיל</th>
+                        <th>קפיצות TAC</th>
+                        <th>דגימות</th>
+                        <th>נצפה לראשונה</th>
+                    </tr>
+                </thead>
+                <tbody id="table-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function() {
+    // Elements
+    const fileInput = document.getElementById('file-input');
+    const uploadArea = document.getElementById('upload-area');
+    const sbBody = document.getElementById('sb-body');
+    const statsBar = document.getElementById('stats-bar');
+    const emptyState = document.getElementById('empty-state');
+    const mapDiv = document.getElementById('map');
+    const tablePanel = document.getElementById('table-panel');
+    const mccFilter = document.getElementById('mcc-filter');
+    const tacFilter = document.getElementById('tac-filter');
+    const tacValue = document.getElementById('tac-value');
+    const statCount = document.getElementById('stat-count');
+    const tableCount = document.getElementById('table-count');
+    const tableTbody = document.getElementById('table-tbody');
+
+    let map = null;
+    let markersGroup = null;
+    let processedData = [];
+
+    // MCC names
+    const MCC_NAMES = {
+        425: 'ישראל', 416: 'ירדן', 420: 'סעודיה', 602: 'מצרים',
+        417: 'סוריה', 418: 'עיראק', 432: 'איראן', 222: 'איטליה',
+        615: 'טוגו', 616: 'בנין', 525: 'סינגפור', 310: 'ארה״ב'
+    };
+
+    // File upload handling
+    fileInput.addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (file) loadJSON(file);
+    });
+
+    uploadArea.addEventListener('dragover', e => {
+        e.preventDefault();
+        uploadArea.style.borderColor = 'var(--accent)';
+    });
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.style.borderColor = '';
+    });
+    uploadArea.addEventListener('drop', e => {
+        e.preventDefault();
+        uploadArea.style.borderColor = '';
+        const file = e.dataTransfer.files[0];
+        if (file && file.name.endsWith('.json')) loadJSON(file);
+    });
+
+    function loadJSON(file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const raw = JSON.parse(e.target.result);
+                // Handle ClickHouse export format (key: array)
+                let data;
+                if (Array.isArray(raw)) {
+                    data = raw;
+                } else {
+                    const key = Object.keys(raw)[0];
+                    data = raw[key];
+                }
+                processData(data);
+                initUI();
+            } catch (err) {
+                alert('שגיאה בקריאת קובץ JSON: ' + err.message);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    function processData(data) {
+        processedData = data.map(item => {
+            // Parse coordinates
+            let lat = null, lon = null;
+            try {
+                const tiles = item.location_tiles;
+                if (typeof tiles === 'string') {
+                    const match = tiles.match(/'(-?[\d.]+),(-?[\d.]+)'/);
+                    if (match) {
+                        lon = parseFloat(match[1]);
+                        lat = parseFloat(match[2]);
+                    }
+                } else if (Array.isArray(tiles) && tiles.length > 0) {
+                    const first = tiles[0];
+                    if (typeof first === 'string') {
+                        const parts = first.split(',');
+                        if (parts.length >= 2) {
+                            lon = parseFloat(parts[0]);
+                            lat = parseFloat(parts[1]);
+                        }
+                    } else if (Array.isArray(first)) {
+                        lon = first[0];
+                        lat = first[1];
+                    }
+                }
+            } catch(e) {}
+
+            // Clean operators
+            let ops = 'Unknown';
+            try {
+                const opNames = item.operator_names;
+                if (typeof opNames === 'string') {
+                    const arr = opNames.replace(/[\[\]']/g, '').split(',').map(s => s.trim()).filter(s => s);
+                    if (arr.length > 0) ops = arr.join(', ');
+                } else if (Array.isArray(opNames)) {
+                    const arr = opNames.filter(s => s && s.trim());
+                    if (arr.length > 0) ops = arr.join(', ');
+                }
+            } catch(e) {}
+
+            return {
+                ...item,
+                lat, lon,
+                clean_ops: ops,
+                distinct_tac_count: parseInt(item.distinct_tac_count) || 0,
+                total_samples: parseInt(item.total_samples) || 0
+            };
+        }).filter(item => item.lat !== null && item.lon !== null && item.distinct_tac_count >= 2);
+    }
+
+    function initUI() {
+        // Show UI
+        uploadArea.classList.add('hidden');
+        sbBody.classList.remove('hidden');
+        statsBar.classList.remove('hidden');
+        emptyState.classList.add('hidden');
+        mapDiv.classList.remove('hidden');
+        tablePanel.classList.remove('hidden');
+
+        // Init map
+        if (!map) {
+            map = L.map('map').setView([31.5, 34.8], 7);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap & CartoDB',
+                maxZoom: 19
+            }).addTo(map);
+            markersGroup = L.featureGroup().addTo(map);
+        }
+
+        // Populate MCC filter
+        const mccs = [...new Set(processedData.map(d => d.network_mcc))].sort((a,b) => a - b);
+        mccFilter.innerHTML = '<option value="all">הכל (Global)</option>';
+        mccs.forEach(mcc => {
+            const opt = document.createElement('option');
+            opt.value = mcc;
+            opt.textContent = MCC_NAMES[mcc] ? `${mcc} (${MCC_NAMES[mcc]})` : mcc;
+            mccFilter.appendChild(opt);
+        });
+
+        // Set max TAC
+        const maxTac = Math.max(...processedData.map(d => d.distinct_tac_count), 15);
+        tacFilter.max = maxTac;
+
+        // Default to Israel if present
+        if (mccs.includes(425)) mccFilter.value = '425';
+
+        renderDashboard();
+    }
+
+    function getColor(tac) {
+        if (tac >= 8) return '#ef4444';
+        if (tac >= 5) return '#f97316';
+        return '#eab308';
+    }
+
+    function getRiskLevel(tac) {
+        if (tac >= 8) return { text: 'גבוה', cls: 'high' };
+        if (tac >= 5) return { text: 'בינוני', cls: 'medium' };
+        return { text: 'נמוך', cls: 'low' };
+    }
+
+    function generateIntelAssessment(item) {
+        const tacList = item.tac_list || '';
+        const hasNullTac = tacList.includes('65535') || tacList.includes('65,535') || tacList.includes(',0,');
+        const highJumpsLowSamples = item.distinct_tac_count >= 5 && item.total_samples < 500;
+        const multiOps = item.clean_ops.includes(',') && item.clean_ops !== 'Unknown';
+
+        if (highJumpsLowSamples) {
+            return `<b>חשד ללוכד IMSI אקטיבי נייד (Tactical Stingray).</b><br>
+                האנטנה משנה מזהי אזור (TAC) בתדירות גבוהה מאוד ביחס לכמות הדגימות הנמוכה (${item.total_samples} בלבד).
+                התנהגות כזו מאפיינת ציוד תקיפה המנסה לאלץ מכשירים בסביבתו לבצע Location Update ולחשוף את זהותם.`;
+        }
+        if (hasNullTac) {
+            return `<b>חשד לציוד לא מזוהה / פיראטי.</b><br>
+                האנטנה משדרת TAC ברירת מחדל (65535 או 0). רשתות סלולריות אזרחיות תקינות לא משדרות מזהים אלו.
+                הדבר מעיד לרוב על פריסת ציוד ניסויי או ציוד פיראטי מבוסס קוד פתוח (SDR).`;
+        }
+        if (multiOps) {
+            return `<b>אנומליית התחזות מפעיל (Spoofing).</b><br>
+                האנטנה זוהתה תחת מספר שמות מפעיל שונים באותו מרחב.
+                ייתכן ומדובר בציוד המנסה 'לדוג' לקוחות מרשתות שונות על ידי זיוף פרטי המפעיל.`;
+        }
+        return `<b>עיוות רשת או חוסר יציבות תשתית.</b><br>
+            נצפו מספר שינויי TAC לאורך זמן ממושך. התנהגות זו פחות אופיינית להתקפה נקודתית,
+            וסביר יותר שמדובר בתשתית אזורית לא יציבה של המפעיל המקומי.`;
+    }
+
+    function renderDashboard() {
+        const selectedMcc = mccFilter.value;
+        const minTac = parseInt(tacFilter.value);
+
+        const filtered = processedData.filter(item => {
+            const matchMcc = selectedMcc === 'all' || item.network_mcc.toString() === selectedMcc;
+            const matchTac = item.distinct_tac_count >= minTac;
+            return matchMcc && matchTac;
+        });
+
+        statCount.textContent = filtered.length;
+        tableCount.textContent = filtered.length;
+
+        // Clear
+        markersGroup.clearLayers();
+        tableTbody.innerHTML = '';
+
+        if (filtered.length === 0) {
+            tableTbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim)">לא נמצאו נתונים תואמים</td></tr>';
+            return;
+        }
+
+        filtered.forEach(item => {
+            const color = getColor(item.distinct_tac_count);
+            const risk = getRiskLevel(item.distinct_tac_count);
+
+            // Marker
+            const marker = L.circleMarker([item.lat, item.lon], {
+                radius: item.distinct_tac_count >= 8 ? 10 : 7,
+                fillColor: color,
+                color: color,
+                weight: 1,
+                opacity: 1,
+                fillOpacity: 0.8
+            });
+
+            const popupHtml = `
+                <div class="popup-header">
+                    <span class="popup-eci">ECI: ${item.cell_eci}</span>
+                    <span class="popup-risk ${risk.cls}">רמת סיכון: ${risk.text}</span>
+                </div>
+                <div class="popup-tech">
+                    <div><span class="label">Net:</span> ${item.network_mcc}/${item.network_mnc} (${item.clean_ops})</div>
+                    <div><span class="label">TAC Jumps:</span> <span class="val-red">${item.distinct_tac_count}</span></div>
+                    <div><span class="label">Samples:</span> ${item.total_samples.toLocaleString()}</div>
+                    <div><span class="label">First seen:</span> ${(item.first_seen || '').substring(0, 10)}</div>
+                </div>
+                <div class="popup-intel">
+                    <div class="popup-intel-title">
+                        <span class="material-icons" style="font-size:14px">security</span>
+                        הערכת מודיעין:
+                    </div>
+                    <div class="popup-intel-body">${generateIntelAssessment(item)}</div>
+                </div>
+            `;
+            marker.bindPopup(popupHtml, { maxWidth: 360 });
+            markersGroup.addLayer(marker);
+
+            // Table row
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="font-family:'JetBrains Mono',monospace;font-weight:600">${item.cell_eci}</td>
+                <td>${item.network_mcc}/${item.network_mnc}</td>
+                <td style="font-size:0.75rem;color:var(--text-dim)">${item.clean_ops}</td>
+                <td><span class="severity-badge ${risk.cls}">${item.distinct_tac_count}</span></td>
+                <td>${item.total_samples.toLocaleString()}</td>
+                <td style="font-size:0.75rem">${(item.first_seen || '').substring(0, 10)}</td>
+            `;
+            tr.onclick = () => {
+                map.setView([item.lat, item.lon], 14);
+                marker.openPopup();
+            };
+            tableTbody.appendChild(tr);
+        });
+
+        // Fit bounds
+        if (markersGroup.getLayers().length > 0) {
+            map.fitBounds(markersGroup.getBounds(), { padding: [50, 50] });
+        }
+    }
+
+    // Event listeners
+    mccFilter.addEventListener('change', renderDashboard);
+    tacFilter.addEventListener('input', e => {
+        tacValue.textContent = e.target.value;
+        renderDashboard();
+    });
+
+})();
+</script>
+</body>
+</html>

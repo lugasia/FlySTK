@@ -66,17 +66,24 @@
       color: var(--sub);
     }
 
+    .nav-links {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+    }
     .nav-link {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       color: var(--accent);
       text-decoration: none;
       font-size: 12px;
-      margin-top: 12px;
+      padding: 4px 8px;
+      background: rgba(59, 130, 246, 0.1);
+      border-radius: 4px;
     }
 
-    .nav-link:hover { text-decoration: underline; }
+    .nav-link:hover { background: rgba(59, 130, 246, 0.2); }
 
     #sb-body {
       flex: 1;
@@ -368,10 +375,16 @@
   <div id="sb-header">
     <h1><span class="material-icons">polyline</span> SQL Builder</h1>
     <p>Draw polygons to generate ClickHouse SQL queries</p>
-    <a href="index.html" class="nav-link">
-      <span class="material-icons" style="font-size:14px">arrow_back</span>
-      Back to Signal Map
-    </a>
+    <div class="nav-links">
+      <a href="index.html" class="nav-link">
+        <span class="material-icons" style="font-size:14px">arrow_back</span>
+        Signal Map
+      </a>
+      <a href="anomaly-detector.html" class="nav-link">
+        <span class="material-icons" style="font-size:14px">security</span>
+        TAC Detector
+      </a>
+    </div>
   </div>
 
   <div id="sb-body">

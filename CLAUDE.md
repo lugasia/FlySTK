@@ -13,13 +13,15 @@
 
 ## File Structure
 ```
-├── index.html        # Main app - signal map viewer
-├── sql-builder.html  # Polygon-based ClickHouse SQL generator
-├── app.js            # All application logic for index.html
-├── style.css         # Styles for index.html
-├── report.html       # Static report template (reference only)
-├── server.py         # Simple HTTP server (python3 server.py)
-└── CLAUDE.md         # This file
+├── index.html                    # Main app - signal map viewer
+├── sql-builder.html              # Polygon-based ClickHouse SQL generator
+├── anomaly-detector.html         # TAC anomaly detection (IMSI-catcher hunter)
+├── cellular_anomaly_detector.py  # Streamlit version of anomaly detector
+├── app.js                        # All application logic for index.html
+├── style.css                     # Styles for index.html
+├── report.html                   # Static report template (reference only)
+├── server.py                     # Simple HTTP server (python3 server.py)
+└── CLAUDE.md                     # This file
 ```
 
 ## Key Features
@@ -49,6 +51,17 @@
 - Jordan border logic (lon 35.3° threshold)
 - RTL support for Hebrew
 
+### TAC Anomaly Detector (anomaly-detector.html)
+- Detects cells with changing TAC (potential IMSI-catchers)
+- JSON file upload from ClickHouse exports
+- Filters by MCC (country) and minimum TAC jumps
+- Intelligence assessment for each suspicious cell:
+  - High jumps + low samples = Tactical Stingray
+  - TAC 65535/0 = Rogue/pirate equipment
+  - Multiple operators = Spoofing attempt
+- Color-coded severity (red: 8+, orange: 5-7, yellow: 2-4)
+- Data table with click-to-fly navigation
+
 ## Data Model
 
 ### CSV Expected Columns
@@ -69,6 +82,20 @@
 -- MCC column: network_mcc
 -- Uses: pointInPolygon(location_geo_coordinates, [...])
 ```
+
+### TAC Anomaly Detector JSON Format
+Expected columns from ClickHouse export:
+| Field | Description |
+|-------|-------------|
+| network_mcc | Mobile Country Code |
+| network_mnc | Mobile Network Code |
+| cell_eci | E-UTRAN Cell ID (antenna) |
+| distinct_tac_count | Number of different TACs observed |
+| tac_list | List of TAC values seen |
+| total_samples | Number of measurements |
+| first_seen | First observation date |
+| operator_names | Array of operator names |
+| location_tiles | Array of coordinates ['lon,lat'] |
 
 ## Important Constants
 
