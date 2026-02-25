@@ -111,7 +111,7 @@
       margin-bottom: 6px;
     }
 
-    select, input[type="text"] {
+    select, input[type="text"], input[type="date"] {
       width: 100%;
       padding: 10px 12px;
       background: var(--card);
@@ -122,9 +122,30 @@
       margin-bottom: 12px;
     }
 
+    input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(0.8);
+      cursor: pointer;
+    }
+
     select:focus, input:focus {
       outline: none;
       border-color: var(--accent);
+    }
+
+    .date-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .date-row input[type="date"] {
+      flex: 1;
+      margin-bottom: 0;
+    }
+
+    .date-row span {
+      color: var(--muted);
+      font-size: 14px;
     }
 
     .checkbox-row {
@@ -302,6 +323,10 @@
       height: 100%;
     }
 
+    #map .leaflet-tile-pane {
+      filter: brightness(1.6) contrast(1.1) saturate(1.1);
+    }
+
     /* Instructions overlay */
     #instructions {
       position: absolute;
@@ -441,6 +466,26 @@
 
       <label class="field">Include only MCC</label>
       <input type="text" id="include-mcc-value" placeholder="e.g., 425">
+    </div>
+
+    <!-- Timeline Filter -->
+    <div class="section">
+      <h3>Timeline Filter</h3>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="use-timeline">
+        <label for="use-timeline">Filter by date range</label>
+      </div>
+
+      <label class="field">Timestamp Column</label>
+      <input type="text" id="timestamp-col" value="timestamp">
+
+      <label class="field">Date Range</label>
+      <div class="date-row">
+        <input type="date" id="date-from" placeholder="From">
+        <span>→</span>
+        <input type="date" id="date-to" placeholder="To">
+      </div>
     </div>
 
     <!-- MCC Reference -->
@@ -681,6 +726,10 @@ function generateSQL() {
   const filterMcc = document.getElementById('filter-mcc').value;
   const includeMcc = document.getElementById('include-mcc').checked;
   const includeMccValue = document.getElementById('include-mcc-value').value;
+  const useTimeline = document.getElementById('use-timeline').checked;
+  const timestampCol = document.getElementById('timestamp-col').value || 'timestamp';
+  const dateFrom = document.getElementById('date-from').value;
+  const dateTo = document.getElementById('date-to').value;
 
   let sql = '';
 
@@ -714,6 +763,12 @@ function generateSQL() {
       if (includeMcc && includeMccValue) {
         conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
       }
+      if (useTimeline && dateFrom) {
+        conditions.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
+      }
+      if (useTimeline && dateTo) {
+        conditions.push(`${timestampCol} <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`);
+      }
       conditions.push(`<span class="function">${condition}</span>`);
 
       sql += `    ${conditions.join('\n    <span class="keyword">AND</span> ')}\n`;
@@ -742,6 +797,12 @@ function generateSQL() {
       if (includeMcc && includeMccValue) {
         conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
       }
+      if (useTimeline && dateFrom) {
+        conditions.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
+      }
+      if (useTimeline && dateTo) {
+        conditions.push(`${timestampCol} <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`);
+      }
       conditions.push(`<span class="function">${condition}</span>`);
 
       sql += `    ${conditions.join('\n    <span class="keyword">AND</span> ')};\n\n`;
@@ -762,6 +823,12 @@ function generateSQL() {
 
     if (excludeMcc && filterMcc) {
       sql += `\n    <span class="keyword">AND</span> network_mcc ${queryType === 'select' ? '!=' : '='} <span class="string">'${filterMcc}'</span>`;
+    }
+    if (useTimeline && dateFrom) {
+      sql += `\n    <span class="keyword">AND</span> ${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`;
+    }
+    if (useTimeline && dateTo) {
+      sql += `\n    <span class="keyword">AND</span> ${timestampCol} <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`;
     }
     sql += `;`;
   }
@@ -798,13 +865,13 @@ document.addEventListener('DOMContentLoaded', () => {
   updatePolygonList();
 
   // Re-generate SQL when settings change
-  ['table-name', 'geo-col', 'filter-mcc', 'include-mcc-value'].forEach(id => {
+  ['table-name', 'geo-col', 'filter-mcc', 'include-mcc-value', 'timestamp-col'].forEach(id => {
     document.getElementById(id).addEventListener('input', generateSQL);
   });
-  ['query-type'].forEach(id => {
+  ['query-type', 'date-from', 'date-to'].forEach(id => {
     document.getElementById(id).addEventListener('change', generateSQL);
   });
-  ['exclude-mcc', 'include-mcc'].forEach(id => {
+  ['exclude-mcc', 'include-mcc', 'use-timeline'].forEach(id => {
     document.getElementById(id).addEventListener('change', generateSQL);
   });
 });

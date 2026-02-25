@@ -773,20 +773,61 @@ function buildAllMultiSelects() {
   const opCounts   = {};
   const plmnCounts = {};
   const isoCounts  = {};
+  const opMccCounts = {};  // Track MCC associations for operators: opIdx -> { mcc -> count }
 
   APP.points.forEach(p => {
-    opCounts  [p[3]] = (opCounts  [p[3]] || 0) + 1;
-    plmnCounts[p[4]] = (plmnCounts[p[4]] || 0) + 1;
-    isoCounts [p[5]] = (isoCounts [p[5]] || 0) + 1;
+    const oi = p[3], pi = p[4];
+    opCounts[oi]   = (opCounts[oi]   || 0) + 1;
+    plmnCounts[pi] = (plmnCounts[pi] || 0) + 1;
+    isoCounts[p[5]] = (isoCounts[p[5]] || 0) + 1;
+
+    // Track MCC for this operator
+    const plmn = APP.plmns[pi] || '';
+    const mcc = plmn.replace('-', '').slice(0, 3);
+    if (mcc) {
+      if (!opMccCounts[oi]) opMccCounts[oi] = {};
+      opMccCounts[oi][mcc] = (opMccCounts[oi][mcc] || 0) + 1;
+    }
   });
+
+  // Get most common MCC for each operator
+  const opMcc = {};
+  Object.entries(opMccCounts).forEach(([oi, mccMap]) => {
+    let maxMcc = '', maxCount = 0;
+    Object.entries(mccMap).forEach(([mcc, cnt]) => {
+      if (cnt > maxCount) { maxMcc = mcc; maxCount = cnt; }
+    });
+    opMcc[oi] = maxMcc;
+  });
+
+  // Helper to get PLMN label with country name
+  const getPlmnLabel = (plmn) => {
+    const mcc = (plmn || '').replace('-', '').slice(0, 3);
+    const info = MCC_TABLE[mcc];
+    return info ? `${plmn} (${info.name})` : plmn;
+  };
+
+  // Helper to get operator label with MCC
+  const getOpLabel = (op, idx) => {
+    const mcc = opMcc[idx];
+    return mcc ? `${op} (${mcc})` : op;
+  };
 
   const toItems = (arr, counts) =>
     arr.map((v, i) => ({ label: v, idx: i, count: counts[i] || 0 }))
        .sort((a, b) => b.count - a.count);
 
-  msOp.build  (toItems(APP.operators, opCounts));
-  msPlmn.build(toItems(APP.plmns,     plmnCounts));
-  msIso.build (toItems(APP.isos,      isoCounts));
+  const toPlmnItems = (arr, counts) =>
+    arr.map((v, i) => ({ label: getPlmnLabel(v), idx: i, count: counts[i] || 0 }))
+       .sort((a, b) => b.count - a.count);
+
+  const toOpItems = (arr, counts) =>
+    arr.map((v, i) => ({ label: getOpLabel(v, i), idx: i, count: counts[i] || 0 }))
+       .sort((a, b) => b.count - a.count);
+
+  msOp.build  (toOpItems(APP.operators, opCounts));
+  msPlmn.build(toPlmnItems(APP.plmns, plmnCounts));
+  msIso.build (toItems(APP.isos, isoCounts));
 
   // Keep FILTERS in sync with the (freshly cleared) selected Sets
   FILTERS.opIdxs   = msOp.selected;
@@ -799,7 +840,28 @@ function buildLegend() {
   container.innerHTML = '';
 
   const opCounts = {};
-  APP.points.forEach(p => { opCounts[p[3]] = (opCounts[p[3]] || 0) + 1; });
+  const opMccCounts = {};  // Track MCC for each operator
+  APP.points.forEach(p => {
+    const oi = p[3], pi = p[4];
+    opCounts[oi] = (opCounts[oi] || 0) + 1;
+    // Track MCC for this operator
+    const plmn = APP.plmns[pi] || '';
+    const mcc = plmn.replace('-', '').slice(0, 3);
+    if (mcc) {
+      if (!opMccCounts[oi]) opMccCounts[oi] = {};
+      opMccCounts[oi][mcc] = (opMccCounts[oi][mcc] || 0) + 1;
+    }
+  });
+
+  // Get most common MCC for each operator
+  const opMcc = {};
+  Object.entries(opMccCounts).forEach(([oi, mccMap]) => {
+    let maxMcc = '', maxCount = 0;
+    Object.entries(mccMap).forEach(([mcc, cnt]) => {
+      if (cnt > maxCount) { maxMcc = mcc; maxCount = cnt; }
+    });
+    opMcc[oi] = maxMcc;
+  });
 
   APP.operators
     .map((op, i) => [op, i, opCounts[i] || 0])
@@ -813,9 +875,10 @@ function buildLegend() {
       dot.className        = 'leg-dot';
       dot.style.background = APP.colors[i];
 
+      const mcc = opMcc[i] || '';
       const lbl = document.createElement('span');
       lbl.className   = 'leg-label';
-      lbl.textContent = op || '(unknown)';
+      lbl.textContent = mcc ? `${op || '(unknown)'} (${mcc})` : (op || '(unknown)');
 
       const cntEl = document.createElement('span');
       cntEl.className   = 'leg-count';

@@ -200,7 +200,7 @@ input[type="date"]:focus { border-color: var(--mauve); }
   flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
 }
 #map { flex: 1; min-height: 0; }
-#map .leaflet-tile-pane { filter: brightness(1.35) contrast(1.05); }
+#map .leaflet-tile-pane { filter: brightness(1.6) contrast(1.1) saturate(1.1); }
 
 /* Empty state */
 #empty-state {
