@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -36,7 +36,7 @@
         #sidebar {
             width: var(--sidebar-w);
             background: var(--card);
-            border-left: 1px solid var(--card-border);
+            border-right: 1px solid var(--card-border);
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -312,8 +312,6 @@
             font-family: 'Inter', sans-serif;
             font-size: 0.8rem;
             line-height: 1.5;
-            direction: rtl;
-            text-align: right;
         }
         .popup-header {
             display: flex;
@@ -345,8 +343,6 @@
             margin-bottom: 10px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.75rem;
-            direction: ltr;
-            text-align: left;
         }
         .popup-tech div { margin-bottom: 3px; }
         .popup-tech .label { color: var(--text-dim); }
@@ -378,27 +374,27 @@
 <aside id="sidebar">
     <div id="sb-header">
         <h1>📡 SIGINT Anomaly Detector</h1>
-        <p>זיהוי תאים מחליפי TAC (חשד ל-IMSI Catcher)</p>
+        <p>Detect TAC-changing cells (IMSI-Catcher suspects)</p>
         <label id="upload-area" for="file-input">
             <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                 <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            <span>גרור JSON או <strong>לחץ להעלאה</strong></span>
+            <span>Drop JSON or <strong>click to upload</strong></span>
         </label>
         <input type="file" id="file-input" accept=".json" style="display:none;">
     </div>
 
     <div id="sb-body" class="hidden">
         <div class="sb-section">
-            <h3>סינון</h3>
+            <h3>Filters</h3>
 
-            <label class="field-label">מדינה (MCC)</label>
+            <label class="field-label">Country (MCC)</label>
             <select id="mcc-filter">
-                <option value="all">הכל (Global)</option>
+                <option value="all">All (Global)</option>
             </select>
 
-            <label class="field-label">מינימום קפיצות TAC</label>
+            <label class="field-label">Minimum TAC Jumps</label>
             <div class="range-wrap">
                 <input type="range" id="tac-filter" min="2" max="15" value="2">
                 <span class="range-val" id="tac-value">2</span>
@@ -406,24 +402,24 @@
         </div>
 
         <div class="sb-section">
-            <h3>מקרא</h3>
+            <h3>Legend</h3>
             <div class="legend-item">
                 <span class="legend-dot red"></span>
-                <span><strong>אדום:</strong> 8+ קפיצות — חשד גבוה ללוכד</span>
+                <span><strong>Red:</strong> 8+ jumps — High IMSI-catcher risk</span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot orange"></span>
-                <span><strong>כתום:</strong> 5-7 קפיצות — אנומליה בינונית</span>
+                <span><strong>Orange:</strong> 5-7 jumps — Medium anomaly</span>
             </div>
             <div class="legend-item">
                 <span class="legend-dot yellow"></span>
-                <span><strong>צהוב:</strong> 2-4 קפיצות — עיוות רשת</span>
+                <span><strong>Yellow:</strong> 2-4 jumps — Network instability</span>
             </div>
         </div>
     </div>
 
     <div id="stats-bar" class="hidden">
-        <div>מציג <strong id="stat-count">0</strong> תאים חשודים</div>
+        <div>Showing <strong id="stat-count">0</strong> suspicious cells</div>
     </div>
 
     <div id="nav-links">
@@ -444,7 +440,7 @@
         <div id="empty-card">
             <div class="icon">🔍</div>
             <h2>SIGINT Anomaly Detector</h2>
-            <p>העלה קובץ JSON מ-ClickHouse כדי לנתח תאים מחליפי TAC</p>
+            <p>Upload a JSON file from ClickHouse to analyze TAC-changing cells</p>
         </div>
     </div>
 
@@ -452,8 +448,8 @@
 
     <div id="table-panel" class="hidden">
         <div id="table-hdr">
-            <div><strong id="table-count">0</strong> תאים</div>
-            <span style="color:var(--text-dim);font-size:0.75rem">לחץ על שורה → מעבר למיקום</span>
+            <div><strong id="table-count">0</strong> cells</div>
+            <span style="color:var(--text-dim);font-size:0.75rem">Click row → fly to location</span>
         </div>
         <div id="table-scroll">
             <table id="data-table">
@@ -461,10 +457,10 @@
                     <tr>
                         <th>ECI</th>
                         <th>MCC/MNC</th>
-                        <th>מפעיל</th>
-                        <th>קפיצות TAC</th>
-                        <th>דגימות</th>
-                        <th>נצפה לראשונה</th>
+                        <th>Operator</th>
+                        <th>TAC Jumps</th>
+                        <th>Samples</th>
+                        <th>First Seen</th>
                     </tr>
                 </thead>
                 <tbody id="table-tbody"></tbody>
@@ -497,9 +493,10 @@
 
     // MCC names
     const MCC_NAMES = {
-        425: 'ישראל', 416: 'ירדן', 420: 'סעודיה', 602: 'מצרים',
-        417: 'סוריה', 418: 'עיראק', 432: 'איראן', 222: 'איטליה',
-        615: 'טוגו', 616: 'בנין', 525: 'סינגפור', 310: 'ארה״ב'
+        425: 'Israel', 416: 'Jordan', 420: 'Saudi Arabia', 602: 'Egypt',
+        417: 'Syria', 418: 'Iraq', 432: 'Iran', 222: 'Italy',
+        615: 'Togo', 616: 'Benin', 525: 'Singapore', 310: 'USA',
+        262: 'Germany', 234: 'UK', 208: 'France', 460: 'China'
     };
 
     // File upload handling
@@ -538,7 +535,7 @@
                 processData(data);
                 initUI();
             } catch (err) {
-                alert('שגיאה בקריאת קובץ JSON: ' + err.message);
+                alert('Error reading JSON file: ' + err.message);
             }
         };
         reader.readAsText(file);
@@ -615,7 +612,7 @@
 
         // Populate MCC filter
         const mccs = [...new Set(processedData.map(d => d.network_mcc))].sort((a,b) => a - b);
-        mccFilter.innerHTML = '<option value="all">הכל (Global)</option>';
+        mccFilter.innerHTML = '<option value="all">All (Global)</option>';
         mccs.forEach(mcc => {
             const opt = document.createElement('option');
             opt.value = mcc;
@@ -640,9 +637,9 @@
     }
 
     function getRiskLevel(tac) {
-        if (tac >= 8) return { text: 'גבוה', cls: 'high' };
-        if (tac >= 5) return { text: 'בינוני', cls: 'medium' };
-        return { text: 'נמוך', cls: 'low' };
+        if (tac >= 8) return { text: 'High', cls: 'high' };
+        if (tac >= 5) return { text: 'Medium', cls: 'medium' };
+        return { text: 'Low', cls: 'low' };
     }
 
     function generateIntelAssessment(item) {
@@ -652,23 +649,23 @@
         const multiOps = item.clean_ops.includes(',') && item.clean_ops !== 'Unknown';
 
         if (highJumpsLowSamples) {
-            return `<b>חשד ללוכד IMSI אקטיבי נייד (Tactical Stingray).</b><br>
-                האנטנה משנה מזהי אזור (TAC) בתדירות גבוהה מאוד ביחס לכמות הדגימות הנמוכה (${item.total_samples} בלבד).
-                התנהגות כזו מאפיינת ציוד תקיפה המנסה לאלץ מכשירים בסביבתו לבצע Location Update ולחשוף את זהותם.`;
+            return `<b>Suspected active mobile IMSI-catcher (Tactical Stingray).</b><br>
+                The antenna is changing Tracking Area Codes (TAC) at a very high frequency relative to the low sample count (only ${item.total_samples}).
+                This behavior is characteristic of attack equipment attempting to force nearby devices to perform Location Updates and reveal their identity.`;
         }
         if (hasNullTac) {
-            return `<b>חשד לציוד לא מזוהה / פיראטי.</b><br>
-                האנטנה משדרת TAC ברירת מחדל (65535 או 0). רשתות סלולריות אזרחיות תקינות לא משדרות מזהים אלו.
-                הדבר מעיד לרוב על פריסת ציוד ניסויי או ציוד פיראטי מבוסס קוד פתוח (SDR).`;
+            return `<b>Suspected unidentified/rogue equipment.</b><br>
+                The antenna is broadcasting default TAC values (65535 or 0). Legitimate civilian cellular networks do not transmit these identifiers.
+                This typically indicates experimental lab equipment leakage, or open-source SDR-based pirate equipment with improper configuration.`;
         }
         if (multiOps) {
-            return `<b>אנומליית התחזות מפעיל (Spoofing).</b><br>
-                האנטנה זוהתה תחת מספר שמות מפעיל שונים באותו מרחב.
-                ייתכן ומדובר בציוד המנסה 'לדוג' לקוחות מרשתות שונות על ידי זיוף פרטי המפעיל.`;
+            return `<b>Operator spoofing anomaly detected.</b><br>
+                The antenna has been identified under multiple different operator names in the same area.
+                This may indicate equipment attempting to 'fish' customers from different networks by spoofing operator credentials.`;
         }
-        return `<b>עיוות רשת או חוסר יציבות תשתית.</b><br>
-            נצפו מספר שינויי TAC לאורך זמן ממושך. התנהגות זו פחות אופיינית להתקפה נקודתית,
-            וסביר יותר שמדובר בתשתית אזורית לא יציבה של המפעיל המקומי.`;
+        return `<b>Network distortion or infrastructure instability.</b><br>
+            Multiple TAC changes observed over an extended period. This behavior is less typical of a targeted attack,
+            and more likely indicates unstable regional infrastructure from the local carrier causing repeated re-routing in the core network.`;
     }
 
     function renderDashboard() {
@@ -689,7 +686,7 @@
         tableTbody.innerHTML = '';
 
         if (filtered.length === 0) {
-            tableTbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim)">לא נמצאו נתונים תואמים</td></tr>';
+            tableTbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim)">No matching data found</td></tr>';
             return;
         }
 
@@ -710,7 +707,7 @@
             const popupHtml = `
                 <div class="popup-header">
                     <span class="popup-eci">ECI: ${item.cell_eci}</span>
-                    <span class="popup-risk ${risk.cls}">רמת סיכון: ${risk.text}</span>
+                    <span class="popup-risk ${risk.cls}">Risk: ${risk.text}</span>
                 </div>
                 <div class="popup-tech">
                     <div><span class="label">Net:</span> ${item.network_mcc}/${item.network_mnc} (${item.clean_ops})</div>
@@ -721,7 +718,7 @@
                 <div class="popup-intel">
                     <div class="popup-intel-title">
                         <span class="material-icons" style="font-size:14px">security</span>
-                        הערכת מודיעין:
+                        Intelligence Assessment:
                     </div>
                     <div class="popup-intel-body">${generateIntelAssessment(item)}</div>
                 </div>
