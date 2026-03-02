@@ -140,6 +140,7 @@ let viewMode   = 'heat';
 let map        = null;
 let heatLayer  = null;
 let dotLayer   = null;
+let towerLayer = null;
 let canvasRend = null;
 let pendingCSV = null;
 let msOp, msPlmn, msIso;
@@ -280,8 +281,9 @@ function initMap() {
 }
 
 function clearLayers() {
-  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
-  if (dotLayer)  { map.removeLayer(dotLayer);  dotLayer  = null; }
+  if (heatLayer)  { map.removeLayer(heatLayer);  heatLayer  = null; }
+  if (dotLayer)   { map.removeLayer(dotLayer);   dotLayer   = null; }
+  if (towerLayer) { map.removeLayer(towerLayer); towerLayer = null; }
 }
 
 function buildHeat(data) {
@@ -310,15 +312,141 @@ function buildHeat(data) {
       },
     }
   ).addTo(map);
+
+  // Add tower markers in ML coverage mode (visible on heatmap too)
+  if (APP.mlCoverageMode) {
+    buildTowerMarkers(data);
+  }
+}
+
+// Build tower markers with sector arrows (separate layer, visible in both views)
+function buildTowerMarkers(data) {
+  if (towerLayer) { map.removeLayer(towerLayer); towerLayer = null; }
+  if (!APP.mlCoverageMode || !data.length) return;
+
+  towerLayer = L.layerGroup();
+
+  // Group data by eNB to find site locations
+  const enbSites = {};
+  data.forEach(([lat, lon, cnt, , , , , enb, eci, , , avgRsrp]) => {
+    if (!enb) return;
+    if (!enbSites[enb]) {
+      enbSites[enb] = { lats: [], lons: [], sectors: {}, samples: 0 };
+    }
+    enbSites[enb].lats.push(lat);
+    enbSites[enb].lons.push(lon);
+    enbSites[enb].samples += cnt;
+
+    // Track sectors (CI mod 256 gives sector, typically 0-2 for 3-sector sites)
+    const ci = eci ? (parseInt(eci) % 256) : 0;
+    const sectorId = ci % 3;
+    if (!enbSites[enb].sectors[sectorId]) {
+      enbSites[enb].sectors[sectorId] = { ci: eci, rsrp: [], count: 0 };
+    }
+    enbSites[enb].sectors[sectorId].count++;
+    if (avgRsrp) enbSites[enb].sectors[sectorId].rsrp.push(avgRsrp);
+  });
+
+  if (Object.keys(enbSites).length === 0) return;
+
+  // Cell tower SVG icon
+  const towerSvg = `
+    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2L12 22" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M8 6L12 2L16 6" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6 10L12 4L18 10" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M4 14L12 6L20 14" stroke="#93c5fd" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="12" cy="2" r="2" fill="#ef4444"/>
+      <path d="M9 22H15" stroke="#3b82f6" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+
+  Object.entries(enbSites).forEach(([enbId, site]) => {
+    // Calculate site center
+    const centerLat = site.lats.reduce((a, b) => a + b, 0) / site.lats.length;
+    const centerLon = site.lons.reduce((a, b) => a + b, 0) / site.lons.length;
+
+    // Create tower marker
+    const siteMarker = L.marker([centerLat, centerLon], {
+      icon: L.divIcon({
+        className: 'enb-site-marker',
+        html: `<div style="
+          background: rgba(15, 23, 42, 0.9);
+          border: 2px solid #3b82f6;
+          border-radius: 8px;
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+        ">${towerSvg}</div>`,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20]
+      }),
+      zIndexOffset: 1000
+    });
+
+    // Build sector info for tooltip
+    const sectorInfo = Object.entries(site.sectors).map(([sId, sec]) => {
+      const avgRsrp = sec.rsrp.length ? (sec.rsrp.reduce((a,b) => a+b, 0) / sec.rsrp.length).toFixed(0) : 'N/A';
+      const arrows = ['↑ N', '↗ NE', '↘ SE'];
+      return `${arrows[sId] || sId}: ${avgRsrp} dBm (${sec.count} pts)`;
+    }).join('<br>');
+
+    siteMarker.bindTooltip(`
+      <div style="font-family:monospace;font-size:11px;">
+        <b>🗼 Site eNB: ${enbId}</b><br>
+        <b>📍 GPS:</b> ${centerLat.toFixed(6)}, ${centerLon.toFixed(6)}<br>
+        <b>📊 Samples:</b> ${site.samples}<br>
+        <hr style="margin:4px 0;border-color:#334155">
+        <b>Sectors:</b><br>${sectorInfo}
+      </div>
+    `, { permanent: false, direction: 'top' });
+
+    // Draw sector direction arrows
+    const sectorColors = ['#3b82f6', '#22c55e', '#f59e0b'];
+    const sectorAngles = [270, 30, 150];  // N, NE, SE
+
+    Object.keys(site.sectors).forEach(sId => {
+      const angle = sectorAngles[sId] || 0;
+      const radius = 0.0015;  // ~150m
+      const angleRad = angle * Math.PI / 180;
+
+      const endLat = centerLat + radius * Math.sin(angleRad);
+      const endLon = centerLon + radius * Math.cos(angleRad);
+
+      const arrowSize = radius * 0.3;
+      const arrowAngle1 = (angle + 150) * Math.PI / 180;
+      const arrowAngle2 = (angle - 150) * Math.PI / 180;
+
+      const arrowLat1 = endLat + arrowSize * Math.sin(arrowAngle1);
+      const arrowLon1 = endLon + arrowSize * Math.cos(arrowAngle1);
+      const arrowLat2 = endLat + arrowSize * Math.sin(arrowAngle2);
+      const arrowLon2 = endLon + arrowSize * Math.cos(arrowAngle2);
+
+      const color = sectorColors[sId] || '#888';
+
+      // Main arrow line
+      towerLayer.addLayer(L.polyline([[centerLat, centerLon], [endLat, endLon]], {
+        color, weight: 4, opacity: 0.9
+      }));
+
+      // Arrow head
+      towerLayer.addLayer(L.polyline([
+        [arrowLat1, arrowLon1], [endLat, endLon], [arrowLat2, arrowLon2]
+      ], { color, weight: 4, opacity: 0.9 }));
+    });
+
+    towerLayer.addLayer(siteMarker);
+  });
+
+  towerLayer.addTo(map);
 }
 
 function buildDots(data) {
   clearLayers();
   if (!data.length) return;
   dotLayer = L.layerGroup();
-
-  // In ML coverage mode, also build eNB site markers and sector indicators
-  const enbSites = {};  // Group by eNB to find site locations
 
   data.forEach(([lat, lon, cnt, oi, pi, ii, ts, enb, eci, anomalyScore, riskLevel, avgRsrp, coverageLevel, coverageColor, coverageScore]) => {
     const op    = APP.operators[oi] || '';
@@ -334,25 +462,6 @@ function buildDots(data) {
       color = riskLevel === 'high' ? '#ef4444' : (riskLevel === 'medium' ? '#f59e0b' : '#10b981');
     } else {
       color = APP.colors[oi] || '#888';
-    }
-
-    // Track eNB sites for site markers (in coverage mode)
-    if (APP.mlCoverageMode && enb) {
-      if (!enbSites[enb]) {
-        enbSites[enb] = { lats: [], lons: [], sectors: {}, samples: 0 };
-      }
-      enbSites[enb].lats.push(lat);
-      enbSites[enb].lons.push(lon);
-      enbSites[enb].samples += cnt;
-
-      // Track sectors (CI mod 256 gives sector, typically 0-2 for 3-sector sites)
-      const ci = eci ? (parseInt(eci) % 256) : 0;
-      const sectorId = ci % 3;  // Assume 3-sector site
-      if (!enbSites[enb].sectors[sectorId]) {
-        enbSites[enb].sectors[sectorId] = { ci: eci, rsrp: [], count: 0 };
-      }
-      enbSites[enb].sectors[sectorId].count++;
-      if (avgRsrp) enbSites[enb].sectors[sectorId].rsrp.push(avgRsrp);
     }
 
     const marker = L.circleMarker([lat, lon], {
@@ -439,113 +548,12 @@ function buildDots(data) {
     dotLayer.addLayer(marker);
   });
 
-  // Add eNB site markers with sector directions (in coverage mode)
-  if (APP.mlCoverageMode && Object.keys(enbSites).length > 0) {
-    Object.entries(enbSites).forEach(([enbId, site]) => {
-      // Calculate site center (average of all measurement points)
-      const centerLat = site.lats.reduce((a, b) => a + b, 0) / site.lats.length;
-      const centerLon = site.lons.reduce((a, b) => a + b, 0) / site.lons.length;
-
-      // Cell tower SVG icon
-      const towerSvg = `
-        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 2L12 22" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>
-          <path d="M8 6L12 2L16 6" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M6 10L12 4L18 10" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M4 14L12 6L20 14" stroke="#93c5fd" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="12" cy="2" r="2" fill="#ef4444"/>
-          <path d="M9 22H15" stroke="#3b82f6" stroke-width="2" stroke-linecap="round"/>
-        </svg>`;
-
-      // Create eNB site marker (cell tower icon)
-      const siteMarker = L.marker([centerLat, centerLon], {
-        icon: L.divIcon({
-          className: 'enb-site-marker',
-          html: `<div style="
-            background: rgba(15, 23, 42, 0.9);
-            border: 2px solid #3b82f6;
-            border-radius: 8px;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.6);
-          ">${towerSvg}</div>`,
-          iconSize: [40, 40],
-          iconAnchor: [20, 20]
-        }),
-        zIndexOffset: 1000
-      });
-
-      // Build sector info for tooltip
-      const sectorInfo = Object.entries(site.sectors).map(([sId, sec]) => {
-        const avgRsrp = sec.rsrp.length ? (sec.rsrp.reduce((a,b) => a+b, 0) / sec.rsrp.length).toFixed(0) : 'N/A';
-        const arrows = ['↑ N', '↗ NE', '↘ SE'];
-        return `${arrows[sId] || sId}: ${avgRsrp} dBm (${sec.count} pts)`;
-      }).join('<br>');
-
-      siteMarker.bindTooltip(`
-        <div style="font-family:monospace;font-size:11px;">
-          <b>🗼 Site eNB: ${enbId}</b><br>
-          <b>📍 GPS:</b> ${centerLat.toFixed(6)}, ${centerLon.toFixed(6)}<br>
-          <b>📊 Samples:</b> ${site.samples}<br>
-          <hr style="margin:4px 0;border-color:#334155">
-          <b>Sectors:</b><br>${sectorInfo}
-        </div>
-      `, { permanent: false, direction: 'top' });
-
-      // Draw sector direction arrows (much larger and visible)
-      const sectorColors = ['#3b82f6', '#22c55e', '#f59e0b'];
-      const sectorAngles = [270, 30, 150];  // N, NE, SE (in degrees, 0 = East)
-
-      Object.keys(site.sectors).forEach(sId => {
-        const angle = sectorAngles[sId] || 0;
-        const radius = 0.0015;  // ~150m - much more visible
-        const angleRad = angle * Math.PI / 180;
-
-        // Arrow endpoint
-        const endLat = centerLat + radius * Math.sin(angleRad);
-        const endLon = centerLon + radius * Math.cos(angleRad);
-
-        // Arrow head points (30 degree spread)
-        const arrowSize = radius * 0.3;
-        const arrowAngle1 = (angle + 150) * Math.PI / 180;
-        const arrowAngle2 = (angle - 150) * Math.PI / 180;
-
-        const arrowLat1 = endLat + arrowSize * Math.sin(arrowAngle1);
-        const arrowLon1 = endLon + arrowSize * Math.cos(arrowAngle1);
-        const arrowLat2 = endLat + arrowSize * Math.sin(arrowAngle2);
-        const arrowLon2 = endLon + arrowSize * Math.cos(arrowAngle2);
-
-        const color = sectorColors[sId] || '#888';
-
-        // Main arrow line
-        const sectorLine = L.polyline([[centerLat, centerLon], [endLat, endLon]], {
-          color: color,
-          weight: 4,
-          opacity: 0.9
-        });
-        dotLayer.addLayer(sectorLine);
-
-        // Arrow head
-        const arrowHead = L.polyline([
-          [arrowLat1, arrowLon1],
-          [endLat, endLon],
-          [arrowLat2, arrowLon2]
-        ], {
-          color: color,
-          weight: 4,
-          opacity: 0.9
-        });
-        dotLayer.addLayer(arrowHead);
-      });
-
-      dotLayer.addLayer(siteMarker);
-    });
-  }
-
   dotLayer.addTo(map);
+
+  // Add tower markers (separate layer, visible in both heatmap and dots views)
+  if (APP.mlCoverageMode) {
+    buildTowerMarkers(data);
+  }
 }
 
 function render() {
