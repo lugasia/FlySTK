@@ -502,9 +502,25 @@ async function loadDashboard() {
       GROUP BY operator, tech ORDER BY n DESC LIMIT 15`)),
 
       // Band Distribution
-      safe(runQuery(`SELECT band_number, band_name, band_duplexMode AS duplex, count() AS n
-        FROM measurements ${w} WHERE band_number IS NOT NULL
-        GROUP BY band_number, band_name, duplex ORDER BY n DESC LIMIT 15`)),
+      safe(runQuery(`SELECT
+        tech,
+        band_number,
+        band_name,
+        band_duplexMode AS duplex,
+        multiIf(
+          band_number IS NOT NULL,
+            concat('B', toString(band_number),
+                   if(band_name != '' AND band_name IS NOT NULL, concat(' · ', band_name), ''),
+                   if(band_duplexMode IS NOT NULL AND band_duplexMode != '', concat(' (', band_duplexMode, ')'), '')),
+          tech = 'GSM',   'GSM — 2G',
+          tech = 'WCDMA', 'WCDMA — 3G',
+          tech = 'NR',    'NR — 5G',
+          concat(tech, ' — unknown band')
+        ) AS band_label,
+        count() AS n
+      FROM measurements ${w}
+      GROUP BY tech, band_number, band_name, duplex, band_label
+      ORDER BY n DESC LIMIT 25`)),
 
       // Top Device Models
       safe(runQuery(`SELECT deviceInfo_deviceModel AS model, count() AS n
@@ -761,7 +777,7 @@ function renderDashboard(d) {
   })();
 
   // ── Band distribution ──
-  const bandHTML = hbar(d.byBand.map(r => ({ ...r, label: `B${r.band_number}${r.band_name ? ' · ' + r.band_name : ''}${r.duplex ? ' (' + r.duplex + ')' : ''}` })), 'n', 'label', total);
+  const bandHTML = hbar(d.byBand, 'n', 'band_label', total);
 
   // ── Device models ──
   const deviceHTML = hbar(d.byDevice, 'n', 'model', total);

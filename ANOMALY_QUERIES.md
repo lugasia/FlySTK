@@ -893,23 +893,41 @@ Only rows with at least one speed test measurement (`internet_downloadMbps IS NO
 
 ### Dashboard-7 · Band Distribution
 
-Frequency band usage breakdown with duplex mode.
+Frequency band usage across **all technologies** (2G / 3G / LTE / 5G NR).
+
+> **Bug fixed:** The previous version used `WHERE band_number IS NOT NULL` which silently excluded all GSM and WCDMA rows (those technologies don't populate `band_number`). The corrected query uses `multiIf` to produce a label for every tech.
 
 ```sql
 SELECT
+    tech,
     band_number,
     band_name,
     band_duplexMode AS duplex,
-    count()         AS n
+    multiIf(
+      band_number IS NOT NULL,
+        concat('B', toString(band_number),
+               if(band_name != '' AND band_name IS NOT NULL, concat(' · ', band_name), ''),
+               if(band_duplexMode IS NOT NULL AND band_duplexMode != '',
+                  concat(' (', band_duplexMode, ')'), '')),
+      tech = 'GSM',   'GSM — 2G',
+      tech = 'WCDMA', 'WCDMA — 3G',
+      tech = 'NR',    'NR — 5G',
+      concat(tech, ' — unknown band')
+    ) AS band_label,
+    count() AS n
 FROM measurements
 -- WHERE <filters>
-WHERE band_number IS NOT NULL
-GROUP BY band_number, band_name, duplex
+GROUP BY tech, band_number, band_name, duplex, band_label
 ORDER BY n DESC
-LIMIT 15
+LIMIT 25
 ```
 
-Rendered as horizontal bars labeled `B{band_number} · {band_name} ({duplex})`.
+| Label produced | Example | Condition |
+|---|---|---|
+| `B{n} · {name} ({duplex})` | `B3 · AWS (FDD)` | LTE / NR rows with `band_number` |
+| `GSM — 2G` | — | GSM rows (no `band_number`) |
+| `WCDMA — 3G` | — | WCDMA rows (no `band_number`) |
+| `NR — 5G` | — | NR rows without `band_number` |
 
 ---
 
