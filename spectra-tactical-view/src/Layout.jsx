@@ -33,7 +33,7 @@ function isSuperAdmin(user) {
   return user?.is_super_admin || user?.role === 'admin';
 }
 
-function Sidebar({ collapsed, setCollapsed, currentPage, currentUser, orgName }) {
+function Sidebar({ collapsed, setCollapsed, currentPage, currentUser, orgName, onLogout }) {
   const { unacknowledgedCount } = useAlerts();
 
   return (
@@ -147,7 +147,7 @@ function Sidebar({ collapsed, setCollapsed, currentPage, currentUser, orgName })
             <div className="flex items-center justify-between gap-2">
               <button
                 onClick={async () => {
-                  await logout();
+                  await onLogout();
                   window.location.href = '/login';
                 }}
                 className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-red-400 transition-colors font-medium"
@@ -261,7 +261,7 @@ export default function Layout({ children, currentPageName }) {
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
       `}</style>
       <div className="flex h-screen w-screen overflow-hidden bg-[#0A0F1E]">
-        <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} currentPage={currentPageName} currentUser={currentUser} orgName={orgName} />
+        <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} currentPage={currentPageName} currentUser={currentUser} orgName={orgName} onLogout={logout} />
         <main className="flex-1 h-full overflow-auto">
           {children}
         </main>

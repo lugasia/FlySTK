@@ -1,44 +1,27 @@
+"""ClickHouse HTTP client — uses requests for reliable SSL on Vercel."""
 from typing import Optional
-"""ClickHouse HTTP client — mirrors server.py pattern, no extra dependencies."""
-import urllib.request
-import urllib.parse
-import urllib.error
-import ssl
-import json
-import base64
+import requests as http_requests
 from config import CH_HOST, CH_PORT, CH_DB, CH_USER, CH_PASSWORD, CH_SSL
 
 
 def run_query(sql: str) -> list[dict]:
     """Execute a ClickHouse SQL query, return rows as list of dicts."""
-    params = urllib.parse.urlencode({
-        "database": CH_DB,
-        "default_format": "JSON",
-    })
     protocol = "https" if CH_SSL else "http"
-    url = f"{protocol}://{CH_HOST}:{CH_PORT}/?{params}"
+    url = f"{protocol}://{CH_HOST}:{CH_PORT}/"
 
-    creds = base64.b64encode(f"{CH_USER}:{CH_PASSWORD}".encode()).decode()
-    req = urllib.request.Request(
+    resp = http_requests.post(
         url,
+        params={"database": CH_DB, "default_format": "JSON"},
         data=sql.encode("utf-8"),
-        headers={
-            "Authorization": f"Basic {creds}",
-            "Content-Type": "text/plain; charset=utf-8",
-        },
-        method="POST",
+        auth=(CH_USER, CH_PASSWORD),
+        headers={"Content-Type": "text/plain; charset=utf-8"},
+        timeout=30,
     )
 
-    ctx = ssl.create_default_context() if CH_SSL else None
-    try:
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-            data = json.loads(resp.read())
-            return data.get("data", [])
-    except urllib.error.HTTPError as e:
-        err = e.read().decode()
-        raise RuntimeError(f"ClickHouse HTTP {e.code}: {err[:300]}")
-    except Exception as e:
-        raise RuntimeError(f"ClickHouse query failed: {e}")
+    if resp.status_code != 200:
+        raise RuntimeError(f"ClickHouse HTTP {resp.status_code}: {resp.text[:300]}")
+
+    return resp.json().get("data", [])
 
 
 def run_query_one(sql: str) -> Optional[dict]:
