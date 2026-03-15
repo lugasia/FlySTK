@@ -16,7 +16,7 @@ function chTsToInput(s) {
   return s.slice(0, 16).replace(" ", "T");
 }
 
-export default function TimelinePlayer({ onFrame, onExit }) {
+export default function TimelinePlayer({ onFrame, onExit, orgId }) {
   const [fromTs, setFromTs]       = useState("");
   const [toTs, setToTs]           = useState("");
   const [bucket, setBucket]       = useState(5);
@@ -31,11 +31,12 @@ export default function TimelinePlayer({ onFrame, onExit }) {
 
   // Auto-set date range from actual data on mount
   useEffect(() => {
-    spectra.fetchTimelineRange().then(r => {
+    if (!orgId) return;
+    spectra.fetchTimelineRange(orgId).then(r => {
       if (r.min_ts) setFromTs(chTsToInput(r.min_ts));
       if (r.max_ts) setToTs(chTsToInput(r.max_ts));
     }).catch(() => {});
-  }, []);
+  }, [orgId]);
 
   // Advance one frame
   const advance = useCallback(() => {
@@ -79,6 +80,7 @@ export default function TimelinePlayer({ onFrame, onExit }) {
         fromTs: toClickHouseTs(fromTs),
         toTs:   toClickHouseTs(toTs),
         bucketMinutes: bucket,
+        orgId,
       });
       if (!data.frames || data.frames.length === 0) {
         setError("No data found for this time range.");

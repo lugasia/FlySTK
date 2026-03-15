@@ -201,25 +201,89 @@ const users = {
   inviteUser: async (email, role) => ({ ok: true, email, role }),
 };
 
-// ── Timeline ─────────────────────────────────────────────────────
+// ── Timeline (browser-side ClickHouse) ───────────────────────────
+
+const MODEM_SOURCE = 'modem';
 
 /**
- * fetchTimeline({ fromTs, toTs, bucketMinutes, imei })
- *   fromTs / toTs — ISO strings e.g. "2025-03-01T00:00:00"
- *   bucketMinutes — 1 | 5 | 15 | 60
- *   imei          — optional IMEI filter
- *
- * Returns { frames, total_frames, from_ts, to_ts, bucket_minutes }
+ * fetchTimelineRange(orgId) — returns { min_ts, max_ts } from ClickHouse.
  */
-async function fetchTimeline({ fromTs, toTs, bucketMinutes = 5, imei } = {}) {
-  const params = new URLSearchParams({ from_ts: fromTs, to_ts: toTs, bucket_minutes: bucketMinutes });
-  if (imei) params.append('imei', imei);
-  return get(`/api/timeline?${params.toString()}`);
+async function fetchTimelineRange(orgId) {
+  const sql = `
+SELECT
+    toString(min(timestamp)) AS min_ts,
+    toString(max(timestamp)) AS max_ts
+FROM measurements
+WHERE source = '${MODEM_SOURCE}'
+  AND deviceInfo_imei != ''
+  AND signal_rsrp != 0`;
+  const json = await queryClickHouse(sql, orgId);
+  const row = json.data?.[0] || {};
+  return { min_ts: row.min_ts || '', max_ts: row.max_ts || '' };
 }
 
-/** Returns { min_ts, max_ts } of available modem data in ClickHouse. */
-async function fetchTimelineRange() {
-  return get('/api/timeline/range');
+/**
+ * fetchTimeline({ fromTs, toTs, bucketMinutes, imei, orgId })
+ *   Queries ClickHouse directly from browser.
+ *   Returns { frames, total_frames, from_ts, to_ts, bucket_minutes }
+ */
+async function fetchTimeline({ fromTs, toTs, bucketMinutes = 5, imei, orgId } = {}) {
+  const imeiClause = imei ? `AND deviceInfo_imei = '${imei}'` : '';
+  const sql = `
+SELECT
+    toStartOfInterval(timestamp, INTERVAL ${bucketMinutes} MINUTE) AS t,
+    deviceInfo_imei AS imei,
+    round(argMax(location_geo_coordinates.2, timestamp), 6) AS lat,
+    round(argMax(location_geo_coordinates.1, timestamp), 6) AS lng,
+    argMax(signal_rsrp, timestamp) AS rsrp,
+    argMax(tech, timestamp) AS tech,
+    argMax(network_operator, timestamp) AS operator,
+    argMax(network_PLMN, timestamp) AS plmn,
+    argMax(cell_tac, timestamp) AS tac,
+    count() AS samples
+FROM measurements
+WHERE source = '${MODEM_SOURCE}'
+  AND deviceInfo_imei != ''
+  AND timestamp >= toDateTime('${fromTs}')
+  AND timestamp <= toDateTime('${toTs}')
+  AND signal_rsrp != 0
+  AND location_geo_coordinates.2 != 0
+  ${imeiClause}
+GROUP BY t, imei
+ORDER BY t ASC, imei ASC`;
+
+  const json = await queryClickHouse(sql, orgId);
+  const rows = json.data || [];
+
+  // Group rows by timestamp bucket into frames
+  const framesMap = {};
+  for (const row of rows) {
+    const t = String(row.t || '');
+    if (!framesMap[t]) framesMap[t] = [];
+    framesMap[t].push({
+      imei:     row.imei || '',
+      lat:      parseFloat(row.lat) || 0,
+      lng:      parseFloat(row.lng) || 0,
+      rsrp:     parseInt(row.rsrp) || 0,
+      tech:     row.tech || '',
+      operator: row.operator || '',
+      plmn:     row.plmn || '',
+      tac:      parseInt(row.tac) || 0,
+      samples:  parseInt(row.samples) || 0,
+    });
+  }
+
+  const frames = Object.entries(framesMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([t, rsus]) => ({ t, rsus }));
+
+  return {
+    frames,
+    total_frames: frames.length,
+    from_ts: fromTs,
+    to_ts: toTs,
+    bucket_minutes: bucketMinutes,
+  };
 }
 
 // ── Browser-side ClickHouse queries ──────────────────────────────

@@ -1868,8 +1868,10 @@ async function analyzeCoverage() {
   resultsContainer.innerHTML = '<p style="color:var(--cyan);padding:20px;text-align:center;">🧠 Running Random Forest analysis...</p>';
 
   try {
-    const mlBase = window.location.hostname === 'localhost' ? 'http://localhost:8000' : '';
-    const response = await fetch(mlBase + '/ml/coverage', {
+    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      throw new Error('ML Analysis requires the local server (python3 server.py). Not available in hosted mode.');
+    }
+    const response = await fetch('http://localhost:8000/ml/coverage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cells: lastQueryResults.data })

@@ -436,6 +436,7 @@ export default function Dashboard() {
           <TimelinePlayer
             onFrame={setPlaybackFrame}
             onExit={() => { setTimelineMode(false); setPlaybackFrame(null); }}
+            orgId={selectedOrgId || currentUser?.organization_id}
           />
         )}
 
