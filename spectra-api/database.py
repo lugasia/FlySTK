@@ -13,8 +13,11 @@ if PG_HOST:
     _password = quote_plus(os.getenv("PG_PASSWORD", ""))
     _port = os.getenv("PG_PORT", "5432")
     _db = os.getenv("PG_DB", "postgres")
-    _url = f"postgresql+psycopg2://{_user}:{_password}@{PG_HOST}:{_port}/{_db}?sslmode=require"
-    engine = create_engine(_url, pool_pre_ping=True)
+    _url = f"postgresql+pg8000://{_user}:{_password}@{PG_HOST}:{_port}/{_db}"
+    import ssl as _ssl
+    _ssl_ctx = _ssl.create_default_context()
+    engine = create_engine(_url, pool_pre_ping=True,
+                           connect_args={"ssl_context": _ssl_ctx})
 
 elif os.getenv("DATABASE_URL"):
     engine = create_engine(os.getenv("DATABASE_URL"), pool_pre_ping=True)
