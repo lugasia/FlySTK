@@ -28,8 +28,13 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Seed tables + initial data on startup
-init_db()
+# Seed tables + initial data on startup (catch errors so the app still boots)
+_init_error = None
+try:
+    init_db()
+except Exception as e:
+    _init_error = str(e)
+    print(f"  !! init_db failed: {e}")
 
 # ── CORS — allow Vite dev server + production ────────────────────
 app.add_middleware(
@@ -130,7 +135,16 @@ def delete_org(org_id: str, db: Session = Depends(get_db)):
 # ── Health check ──────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "spectra-api", "version": "1.0.0"}
+    import os
+    return {
+        "status": "ok" if not _init_error else "degraded",
+        "service": "spectra-api",
+        "version": "1.0.0",
+        "init_error": _init_error,
+        "pg_host": os.getenv("PG_HOST", "(not set)"),
+        "has_database_url": bool(os.getenv("DATABASE_URL")),
+        "vercel": bool(os.getenv("VERCEL")),
+    }
 
 
 # ── ClickHouse connectivity test ──────────────────────────────────
