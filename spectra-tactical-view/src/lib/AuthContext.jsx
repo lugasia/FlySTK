@@ -14,18 +14,20 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState(null);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
   const [appPublicSettings] = useState({ id: 'spectra', public_settings: {} });
 
   useEffect(() => {
-    // Detect recovery hash before anything else — don't run normal auth init
+    // Detect recovery hash before anything else
     const hash = window.location.hash;
     const isRecoveryFlow = hash.includes('type=recovery');
 
-    // Register the listener FIRST so it catches the recovery event
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === 'PASSWORD_RECOVERY' && session) {
-          window.location.href = '/login?recovery=true';
+          // Don't redirect — just flag recovery mode (keeps session alive)
+          setIsPasswordRecovery(true);
+          setIsLoadingAuth(false);
           return;
         }
         if (event === 'SIGNED_IN' && session) {
@@ -50,7 +52,6 @@ export const AuthProvider = ({ children }) => {
 
     // If recovery flow, skip normal init — let onAuthStateChange handle it
     if (isRecoveryFlow) {
-      // Supabase will process the hash and fire PASSWORD_RECOVERY
       return () => subscription.unsubscribe();
     }
 
@@ -84,6 +85,7 @@ export const AuthProvider = ({ children }) => {
       user, setUser, isAuthenticated, setIsAuthenticated,
       isLoadingAuth, isLoadingPublicSettings: false,
       authError, appPublicSettings, logout,
+      isPasswordRecovery, setIsPasswordRecovery,
       navigateToLogin: () => { window.location.href = '/login'; },
       checkAppState: () => {},
     }}>

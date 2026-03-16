@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 export default function Login() {
   const [error, setError] = useState(null);
@@ -11,34 +11,7 @@ export default function Login() {
   const [confirmationSent, setConfirmationSent] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [resetSent, setResetSent] = useState(false);
-  const [isRecovery, setIsRecovery] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [passwordUpdated, setPasswordUpdated] = useState(false);
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-
-  useEffect(() => {
-    if (searchParams.get('recovery') === 'true') {
-      setIsRecovery(true);
-    }
-  }, [searchParams]);
-
-  const handleSetNewPassword = async (e) => {
-    e.preventDefault();
-    if (!newPassword || newPassword.length < 6) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
-      if (error) throw error;
-      setPasswordUpdated(true);
-      setTimeout(() => navigate('/Dashboard'), 2000);
-    } catch (err) {
-      setError(err.message || 'Failed to update password');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleForgotPassword = async (e) => {
     e.preventDefault();
@@ -89,51 +62,6 @@ export default function Login() {
     });
     if (error) setError(error.message);
   };
-
-  // Password recovery — set new password
-  if (isRecovery) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0A0F1E]">
-        <div className="w-full max-w-md p-10 rounded-2xl bg-[#0F1629] border border-white/[0.06] shadow-2xl">
-          <div className="flex flex-col items-center mb-8">
-            <img src="/fcic.png" alt="Flycomm" className="w-64 mb-8 object-contain" />
-            <h2 className="text-xl font-bold text-slate-100">Set New Password</h2>
-            <p className="text-sm text-slate-400 mt-2">Enter your new password below</p>
-          </div>
-          {passwordUpdated ? (
-            <div className="text-center">
-              <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-green-500/10 flex items-center justify-center">
-                <svg className="w-7 h-7 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <p className="text-sm text-slate-300">Password updated. Redirecting...</p>
-            </div>
-          ) : (
-            <form onSubmit={handleSetNewPassword} className="space-y-3">
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="New password (min 6 characters)"
-                required
-                minLength={6}
-                className="w-full px-4 py-2.5 rounded-lg bg-[#1A2238] border border-white/[0.08] text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
-              />
-              <button
-                type="submit"
-                disabled={loading || newPassword.length < 6}
-                className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
-              >
-                {loading ? 'Updating...' : 'Update Password'}
-              </button>
-              {error && <p className="text-center text-sm text-red-400">{error}</p>}
-            </form>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   // Forgot password — send reset email
   if (isForgotPassword) {

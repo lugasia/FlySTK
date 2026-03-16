@@ -8,6 +8,7 @@ import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import Login from '@/pages/Login';
+import PasswordRecovery from '@/pages/PasswordRecovery';
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -18,7 +19,7 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
   : <>{children}</>;
 
 function RequireAuth({ children }) {
-  const { isLoadingAuth, isAuthenticated, authError } = useAuth();
+  const { isLoadingAuth, isAuthenticated, authError, isPasswordRecovery } = useAuth();
 
   if (isLoadingAuth) {
     return (
@@ -26,6 +27,10 @@ function RequireAuth({ children }) {
         <div className="w-8 h-8 border-4 border-slate-700 border-t-blue-400 rounded-full animate-spin"></div>
       </div>
     );
+  }
+
+  if (isPasswordRecovery) {
+    return <PasswordRecovery />;
   }
 
   if (authError?.type === 'user_not_registered') {
