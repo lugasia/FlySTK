@@ -478,7 +478,7 @@ const ANOMALY_LIBRARY = [
     },
     generateSQL(p, extras) {
       const w = buildWhere([`signal_timingAdvance IS NOT NULL`], extras);
-      return `-- Timing Advance = 0 Detection — ALL results CRITICAL\nSELECT\n    ${CELL_SEL},\n    network_PLMN, network_operator, network_iso,\n    countIf(signal_timingAdvance = 0) AS ta_zero_count,\n    count() AS counted,\n    min(timestamp) AS first_seen,\n    max(timestamp) AS last_seen,\n    avg(location_geo_coordinates.2) AS lat,\n    avg(location_geo_coordinates.1) AS lon\nFROM measurements\n${w}\nGROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso\nHAVING ta_zero_count >= ${p.min_count}\nORDER BY ta_zero_count DESC\nLIMIT 500;`;
+      return `-- Timing Advance = 0 Detection — ALL results CRITICAL\n-- Uses unique samples (sample_id) to avoid duplicate counting\nSELECT\n    ${CELL_SEL},\n    network_PLMN, network_operator, network_iso,\n    uniqExactIf(sample_id, signal_timingAdvance = 0) AS ta_zero_count,\n    uniqExact(sample_id) AS counted,\n    min(timestamp) AS first_seen,\n    max(timestamp) AS last_seen,\n    avg(location_geo_coordinates.2) AS lat,\n    avg(location_geo_coordinates.1) AS lon\nFROM measurements\n${w}\nGROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso\nHAVING ta_zero_count >= ${p.min_count}\nORDER BY ta_zero_count DESC\nLIMIT 500;`;
     }
   },
   {
