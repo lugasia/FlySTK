@@ -2032,12 +2032,12 @@ function saveCredentials() {
     user: document.getElementById('db-user').value.trim(),
     password: btoa(document.getElementById('db-pass').value)
   };
-  sessionStorage.setItem(CREDS_KEY, JSON.stringify(c));
+  localStorage.setItem(CREDS_KEY, JSON.stringify(c));
 }
 
 function loadCredentials() {
-  const saved = sessionStorage.getItem(CREDS_KEY);
-  if (!saved) return;
+  const saved = localStorage.getItem(CREDS_KEY);
+  if (!saved) { document.getElementById('conn-panel').classList.add('open'); return; }
   try {
     const c = JSON.parse(saved);
     if (c.host)     document.getElementById('db-host').value = c.host;
@@ -2046,11 +2046,11 @@ function loadCredentials() {
     if (c.user)     document.getElementById('db-user').value = c.user;
     if (c.password) document.getElementById('db-pass').value = atob(c.password);
     if (c.host && c.user && c.password) testConnection(true);
-  } catch (e) {}
+  } catch (e) { document.getElementById('conn-panel').classList.add('open'); }
 }
 
 function clearCredentials() {
-  sessionStorage.removeItem(CREDS_KEY);
+  localStorage.removeItem(CREDS_KEY);
   document.getElementById('db-user').value = '';
   document.getElementById('db-pass').value = '';
   setConnStatus('', 'Not connected — click to configure');
