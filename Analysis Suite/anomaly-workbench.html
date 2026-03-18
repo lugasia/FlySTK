@@ -478,7 +478,7 @@ const ANOMALY_LIBRARY = [
     },
     generateSQL(p, extras) {
       const w = buildWhere([`signal_timingAdvance IS NOT NULL`], extras);
-      return `-- Timing Advance = 0 Detection — ALL results CRITICAL\n-- Uses unique samples (sample_id) to avoid duplicate counting\nSELECT\n    ${CELL_SEL},\n    network_PLMN, network_operator, network_iso,\n    uniqExactIf(sample_id, signal_timingAdvance = 0) AS ta_zero_count,\n    uniqExact(sample_id) AS counted,\n    min(timestamp) AS first_seen,\n    max(timestamp) AS last_seen,\n    avg(location_geo_coordinates.2) AS lat,\n    avg(location_geo_coordinates.1) AS lon\nFROM measurements\n${w}\nGROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso\nHAVING ta_zero_count >= ${p.min_count}\nORDER BY ta_zero_count DESC\nLIMIT 500;`;
+      return `-- Timing Advance = 0 Detection — ALL results CRITICAL\n-- Uses unique samples (sample_id) to avoid duplicate counting\nSELECT\n    ${CELL_SEL},\n    network_PLMN, network_operator, network_iso,\n    uniqExactIf(sample_id, signal_timingAdvance = 0) AS ta_zero_count,\n    uniqExact(sample_id) AS counted,\n    uniqExact(deviceInfo_deviceId) AS unique_devices,\n    min(timestamp) AS first_seen,\n    max(timestamp) AS last_seen,\n    avg(location_geo_coordinates.2) AS lat,\n    avg(location_geo_coordinates.1) AS lon\nFROM measurements\n${w}\nGROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso\nHAVING ta_zero_count >= ${p.min_count}\nORDER BY ta_zero_count DESC\nLIMIT 500;`;
     }
   },
   {
@@ -978,6 +978,7 @@ function renderMarkers() {
       <div class="popup-row"><span class="lbl">Operator</span><span>${row.network_operator || '—'}</span></div>
       <div class="popup-row"><span class="lbl">${selectedAnomaly.metricLabel}</span><span>${md}</span></div>
       <div class="popup-row"><span class="lbl">Samples</span><span>${row.counted || '—'}</span></div>
+      ${row.unique_devices != null ? `<div class="popup-row"><span class="lbl">Unique Devices</span><span>${row.unique_devices}</span></div>` : ''}
       <div class="popup-row"><span class="lbl">First Seen</span><span style="font-family:monospace;font-size:11px">${row.first_seen ? String(row.first_seen).replace('T',' ').slice(0,16) : '—'}</span></div>
       <div class="popup-row"><span class="lbl">Last Seen</span><span style="font-family:monospace;font-size:11px">${row.last_seen ? String(row.last_seen).replace('T',' ').slice(0,16) : '—'}</span></div>
       <div class="popup-row"><span class="lbl">Coords</span><span style="font-family:monospace;font-size:11px">${lat.toFixed(5)}, ${lon.toFixed(5)}</span></div>
@@ -1014,6 +1015,8 @@ function sortedResults() {
       va = a._confidence || 0; vb = b._confidence || 0;
     } else if (sortCol === 'counted') {
       va = parseFloat(a.counted) || 0; vb = parseFloat(b.counted) || 0;
+    } else if (sortCol === 'unique_devices') {
+      va = parseFloat(a.unique_devices) || 0; vb = parseFloat(b.unique_devices) || 0;
     } else if (sortCol === 'metric') {
       va = parseFloat(a[selectedAnomaly.metricKey]) || 0;
       vb = parseFloat(b[selectedAnomaly.metricKey]) || 0;
@@ -1039,7 +1042,7 @@ function renderTable() {
   document.getElementById('table-head').innerHTML =
     th('Severity', '_severity') + th('Confidence', '_confidence') +
     `<th>Cell / ECI</th><th>eNB</th><th>PLMN</th><th>Operator</th>` +
-    th(ml, 'metric') + th('Samples', 'counted') +
+    th(ml, 'metric') + th('Samples', 'counted') + th('Devices', 'unique_devices') +
     th('First Seen', 'first_seen') + th('Last Seen', 'last_seen') +
     `<th>Lat / Lon</th>`;
 
@@ -1058,6 +1061,7 @@ function renderTable() {
       <td>${row.network_PLMN || '—'}</td><td>${row.network_operator || '—'}</td>
       <td style="font-family:'JetBrains Mono',monospace">${md}</td>
       <td>${row.counted || '—'}</td>
+      <td>${row.unique_devices != null ? row.unique_devices : '—'}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap">${fmtTs(row.first_seen)}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap">${fmtTs(row.last_seen)}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${lat}, ${lon}</td>
@@ -1110,6 +1114,7 @@ function generateReport() {
         <div><span style="color:#94a3b8">Operator:</span> <strong>${row.network_operator||'—'}</strong></div>
         <div><span style="color:#94a3b8">${ml}:</span> <strong style="color:${c}">${md}</strong></div>
         <div><span style="color:#94a3b8">Samples:</span> <strong>${row.counted||'—'}</strong></div>
+        ${row.unique_devices != null ? `<div><span style="color:#94a3b8">Unique Devices:</span> <strong>${row.unique_devices}</strong></div>` : ''}
         <div><span style="color:#94a3b8">Country:</span> <strong>${row.network_iso||'—'}</strong></div>
         <div><span style="color:#94a3b8">Coords:</span> <strong style="font-family:monospace;font-size:11px">${lat}, ${lon}</strong></div>
         <div><span style="color:#94a3b8">First Seen:</span> <strong style="font-family:monospace;font-size:11px">${fmtTs(row.first_seen)}</strong></div>
@@ -1166,7 +1171,7 @@ ${sorted.length > 200 ? `<p style="text-align:center;color:#64748b;font-size:12p
 function exportCSV() {
   if (!currentResults.length || !selectedAnomaly) return;
   const mk   = selectedAnomaly.metricKey;
-  const cols  = ['_severity', '_confidence', 'cell_ecgi', 'cell_eci', 'cell_enb', 'cell_nci', 'cell_lac', 'cell_cid', 'network_PLMN', 'network_operator', 'network_iso', mk, 'counted', 'first_seen', 'last_seen', 'lat', 'lon', '_label', '_assessment'];
+  const cols  = ['_severity', '_confidence', 'cell_ecgi', 'cell_eci', 'cell_enb', 'cell_nci', 'cell_lac', 'cell_cid', 'network_PLMN', 'network_operator', 'network_iso', mk, 'counted', 'unique_devices', 'first_seen', 'last_seen', 'lat', 'lon', '_label', '_assessment'];
   const header = cols.join(',');
   const rows   = sortedResults().map(r => cols.map(c => {
     const v = r[c] ?? '';
