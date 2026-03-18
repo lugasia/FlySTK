@@ -1289,18 +1289,93 @@ function renderCountryFilter() {
 
 function toggleIso(iso) {
   if (activeIsoFilter.size === 0) {
-    // First click: select only that ISO (exclude others)
-    const all = [...new Set(currentResults.map(r => r.network_iso || '').filter(Boolean))];
-    activeIsoFilter = new Set(all.filter(i => i !== iso));
+    // First click: show ONLY this ISO
+    activeIsoFilter = new Set([iso]);
   } else if (activeIsoFilter.has(iso)) {
     activeIsoFilter.delete(iso);
-    if (activeIsoFilter.size === 0 || activeIsoFilter.size === [...new Set(currentResults.map(r => r.network_iso || '').filter(Boolean))].length - 1) activeIsoFilter = new Set();
+    // Empty = show all
   } else {
     activeIsoFilter.add(iso);
+    // All ISOs selected = reset to show-all
+    const allIsos = [...new Set(currentResults.map(r => r.network_iso || '').filter(Boolean))];
+    if (activeIsoFilter.size >= allIsos.length) activeIsoFilter = new Set();
   }
   if (window._renderCountryChips) window._renderCountryChips();
-  renderMarkers();
-  renderTable();
+  if (corrMode) {
+    applyCorrIsoFilter();
+  } else {
+    renderMarkers();
+    renderTable();
+  }
+}
+
+// Re-render pulsing hotspot markers filtered by current ISO selection
+function applyCorrIsoFilter() {
+  const allCorrs = window._corrResults || [];
+  const vis = activeIsoFilter.size === 0 ? allCorrs
+    : allCorrs.filter(c => c.hits.some(h => activeIsoFilter.has(h.network_iso || '')));
+
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  if (vis.length === 0) {
+    document.getElementById('data-stats').innerHTML =
+      `<strong>0</strong> hotspots match filter &nbsp;·&nbsp;
+       <span style="color:var(--text-muted);font-size:11px">clear country filter to restore all hotspots</span>`;
+    document.getElementById('table-body').innerHTML =
+      `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">No hotspots match selected countries</td></tr>`;
+    return;
+  }
+
+  vis.forEach((c, i) => {
+    const lat = parseFloat(c.lat), lon = parseFloat(c.lon);
+    if (isNaN(lat) || isNaN(lon)) return;
+    const sz = 8 + Math.min(c.anomalyCount - 2, 4) * 4;
+    const color = c.maxColor;
+    const assessmentList = c.hits.map(h =>
+      `<div style="margin-bottom:4px"><span style="background:${h._color}22;color:${h._color};border:1px solid ${h._color}44;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700">${h._severity}</span> <strong>${h._anomalyName}</strong><br><span style="font-size:11px;color:#94a3b8">${h._assessment}</span></div>`
+    ).join('');
+    const icon = L.divIcon({
+      className: '',
+      html: `<div class="hotspot-outer" style="width:${sz}px;height:${sz}px;background:${color};box-shadow:0 0 ${sz/2}px ${color}66">
+               <div class="hotspot-ring" style="border:2px solid ${color}"></div>
+             </div>`,
+      iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2]
+    });
+    const m = L.marker([lat, lon], { icon });
+    m.bindPopup(`
+      <div class="popup-title" style="color:${color}">Threat Hotspot — ${c.anomalyCount} Anomaly Types</div>
+      <div class="popup-row"><span class="lbl">Max Severity</span><span class="sev-badge ${c.maxSeverity}">${c.maxSeverity}</span></div>
+      <div class="popup-row"><span class="lbl">Cell ID</span><span style="font-family:monospace;font-size:11px">${c.cellDisplay}</span></div>
+      <div class="popup-row"><span class="lbl">Anomaly Types</span><span>${c.anomalyNames.join(', ')}</span></div>
+      <div class="popup-row"><span class="lbl">Coordinates</span><span style="font-family:monospace;font-size:11px">${lat.toFixed(5)}, ${lon.toFixed(5)}</span></div>
+      <div style="margin-top:10px;border-top:1px solid var(--card-border);padding-top:10px">${assessmentList}</div>`);
+    m.addTo(map);
+    markers.push(m);
+  });
+
+  const critHots = vis.filter(c => c.maxSeverity === 'CRITICAL').length;
+  const filterNote = activeIsoFilter.size > 0
+    ? ` &nbsp;·&nbsp; <span style="color:var(--cyan);font-size:11px">${[...activeIsoFilter].join(', ').toUpperCase()} only</span>` : '';
+  const statsEl = document.getElementById('data-stats');
+  statsEl.style.display = 'block';
+  statsEl.innerHTML = `<strong>${vis.length}</strong> hotspots &nbsp;·&nbsp; <span style="color:var(--red)">${critHots} CRITICAL</span> &nbsp;·&nbsp; Total scanned: ${Object.values(sessionStore).reduce((s, r) => s + r.length, 0)} events${filterNote}
+    <button class="btn-sm btn-secondary" onclick="generateCorrelationReport()" style="margin-left:10px;padding:3px 8px;font-size:10px;display:inline-flex;align-items:center;gap:3px;border-radius:5px">
+      <span class="material-icons" style="font-size:12px">summarize</span>Report
+    </button>`;
+
+  window._visibleCorrResults = vis;
+  document.getElementById('table-wrap').style.display = 'block';
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('table-head').innerHTML = `<th>Max Severity</th><th>Cell / ECI</th><th>Count</th><th>Anomaly Types</th><th>Lat / Lon</th>`;
+  document.getElementById('table-body').innerHTML = vis.map((c, i) => `
+    <tr onclick="flyToCorr(${i})" style="cursor:pointer">
+      <td><span class="sev-badge ${c.maxSeverity}">${c.maxSeverity}</span></td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${c.cellDisplay}</td>
+      <td><strong style="color:${c.maxColor}">${c.anomalyCount}</strong></td>
+      <td style="font-size:11px">${c.anomalyNames.join(', ')}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${parseFloat(c.lat).toFixed(5)}, ${parseFloat(c.lon).toFixed(5)}</td>
+    </tr>`).join('');
 }
 
 function th(label, col) {
@@ -1492,32 +1567,37 @@ async function runAllScans() {
   const total  = ANOMALY_LIBRARY.length;
   let done     = 0;
 
-  ltxt.textContent = `Launching ${total} scans in parallel…`;
+  ltxt.textContent = `Scanning 0/${total}…`;
 
   const t0 = Date.now();
-  const tasks = ANOMALY_LIBRARY.map(a => {
-    const sql = a.generateSQL(defaultParamsFor(a), extras).replace(/LIMIT \d+;/, `LIMIT ${lim};`);
-    return executeClickHouseQuery(sql)
-      .then(result => {
-        const rows = (result.data || []).filter(r => !isNaN(parseFloat(r.lat)) && !isNaN(parseFloat(r.lon)));
-        sessionStore[a.id] = rows.map(row => {
-          const cls  = a.classifyRow(row);
-          const conf = computeConfidence({ ...row, _severity: cls.severity });
-          return { ...row, _severity: cls.severity, _color: cls.color, _label: cls.label, _assessment: cls.assessment, _confidence: conf, _anomalyId: a.id, _anomalyName: a.name };
-        });
-      })
-      .catch(e => {
-        console.warn(`Scan failed for ${a.id}:`, e.message);
-        sessionStore[a.id] = [];
-      })
-      .finally(() => {
-        done++;
-        ltxt.textContent = `${done}/${total} scans complete…`;
-        updateAnomalyBadges();
-      });
-  });
 
-  await Promise.allSettled(tasks);
+  // Run with concurrency limit of 3 — avoids overwhelming ClickHouse
+  const CONCURRENCY = 3;
+  const queue = [...ANOMALY_LIBRARY];
+  async function runOne(a) {
+    const sql = a.generateSQL(defaultParamsFor(a), extras).replace(/LIMIT \d+;/, `LIMIT ${lim};`);
+    try {
+      const result = await executeClickHouseQuery(sql);
+      const rows = (result.data || []).filter(r => !isNaN(parseFloat(r.lat)) && !isNaN(parseFloat(r.lon)));
+      sessionStore[a.id] = rows.map(row => {
+        const cls  = a.classifyRow(row);
+        const conf = computeConfidence({ ...row, _severity: cls.severity });
+        return { ...row, _severity: cls.severity, _color: cls.color, _label: cls.label, _assessment: cls.assessment, _confidence: conf, _anomalyId: a.id, _anomalyName: a.name };
+      });
+    } catch(e) {
+      console.warn(`Scan failed for ${a.id}:`, e.message);
+      sessionStore[a.id] = [];
+    }
+    done++;
+    ltxt.textContent = `Scanning ${done}/${total}…`;
+    updateAnomalyBadges();
+  }
+
+  // Process queue with max CONCURRENCY workers
+  const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+    while (queue.length) await runOne(queue.shift());
+  });
+  await Promise.all(workers);
   lastQueryMs = Date.now() - t0;
 
   overlay.classList.remove('show');
@@ -1723,7 +1803,7 @@ function showCorrelationView() {
 }
 
 function flyToCorr(i) {
-  const c = (window._corrResults || [])[i];
+  const c = (window._visibleCorrResults || window._corrResults || [])[i];
   if (!c) return;
   map.flyTo([parseFloat(c.lat), parseFloat(c.lon)], 15, { duration: 0.8 });
   if (markers[i]) markers[i].openPopup();
