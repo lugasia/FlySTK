@@ -234,6 +234,7 @@ function checkSQLBuilderData() {
     if (detected.coverage_level) colMap.coverage_level = detected.coverage_level;
     if (detected.coverage_color) colMap.coverage_color = detected.coverage_color;
     if (detected.coverage_score) colMap.coverage_score = detected.coverage_score;
+    if (detected.band_name) colMap.band_name = detected.band_name;
 
     console.log('[Signal Map] Column map:', colMap);
 
@@ -576,7 +577,7 @@ function buildDots(data) {
   if (!data.length) return;
   dotLayer = L.layerGroup();
 
-  data.forEach(([lat, lon, cnt, oi, pi, ii, ts, enb, eci, anomalyScore, riskLevel, avgRsrp, coverageLevel, coverageColor, coverageScore]) => {
+  data.forEach(([lat, lon, cnt, oi, pi, ii, ts, enb, eci, anomalyScore, riskLevel, avgRsrp, coverageLevel, coverageColor, coverageScore, bandName]) => {
     const op    = APP.operators[oi] || '';
     const plmn  = APP.plmns[pi]     || '';
     const iso   = APP.isos[ii]      || '';
@@ -640,6 +641,7 @@ function buildDots(data) {
       ['ISO',      iso  || '—', !iso],
     ];
 
+    if (bandName) rows.push(['Band', String(bandName), false]);
     if (enb) rows.push(['eNB', String(enb), false]);
     if (eci) rows.push(['ECI', String(eci), false]);
 
@@ -1539,6 +1541,7 @@ function detectColumns(headers) {
     coverage_level: find('coverage_level'),
     coverage_color: find('coverage_color'),
     coverage_score: find('coverage_score'),
+    band_name: find('band_name', 'band'),
   };
 }
 
@@ -1664,6 +1667,7 @@ function _processData(rows, colMap, filename) {
       const coverageLevel = colMap.coverage_level ? (row[colMap.coverage_level] || '') : '';
       const coverageColor = colMap.coverage_color ? (row[colMap.coverage_color] || '') : '';
       const coverageScore = colMap.coverage_score ? (parseInt(row[colMap.coverage_score]) || 0) : 0;
+      const bandName = colMap.band_name ? (row[colMap.band_name] || '') : '';
 
       let ts = null;
       if (tsRaw) {
@@ -1683,7 +1687,7 @@ function _processData(rows, colMap, filename) {
         if (!(val in lookup)) { lookup[val] = list.length; list.push(val); }
       }
 
-      points.push([lat, lon, cnt, opIdx[op], plmnIdx[plmn], isoIdx[iso], ts, enb, eci, anomalyScore, riskLevel, avgRsrp, coverageLevel, coverageColor, coverageScore]);
+      points.push([lat, lon, cnt, opIdx[op], plmnIdx[plmn], isoIdx[iso], ts, enb, eci, anomalyScore, riskLevel, avgRsrp, coverageLevel, coverageColor, coverageScore, bandName]);
     } catch (_) { /* skip bad row */ }
   });
 

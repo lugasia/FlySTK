@@ -3072,7 +3072,10 @@ LIMIT 50000`;
     return sql;
   }
 
-  // Standard SELECT query with polygon
+  // Standard SELECT query with polygon — group by CELL (not UE samples)
+  // Exclude 'Searching' state
+  conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
+
   const p = polygons[0];
   const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
   const pointInPolygon = `pointInPolygon(${geoCol}, [${polyPoints}])`;
@@ -3080,23 +3083,26 @@ LIMIT 50000`;
   conditions.push(condition);
 
   let sql = `SELECT
+    cell_eci,
+    cell_enb,
     network_PLMN,
     network_operator,
     network_iso,
-    count(network_PLMN) AS counted,
-    tupleElement(${geoCol}, 1) AS longitude,
-    tupleElement(${geoCol}, 2) AS latitude,
-    timestamp
+    any(band_name) AS band_name,
+    count() AS counted,
+    avg(${geoCol}.1) AS longitude,
+    avg(${geoCol}.2) AS latitude,
+    min(timestamp) AS first_seen
 FROM ${tableName}
 WHERE
     ${conditions.join('\n    AND ')}
 GROUP BY
+    cell_eci,
+    cell_enb,
     network_PLMN,
     network_operator,
-    network_iso,
-    longitude,
-    latitude,
-    timestamp
+    network_iso
+ORDER BY counted DESC
 LIMIT 50000`;
 
   return sql;
