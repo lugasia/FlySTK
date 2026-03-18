@@ -385,6 +385,13 @@
         </div>
       </div>
 
+      <!-- Country filter -->
+      <div id="country-filter-section" style="display:none">
+        <div class="sb-label">Filter by Country</div>
+        <div id="country-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:4px"></div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:4px">Click to toggle. Map + table update instantly.</div>
+      </div>
+
       <!-- Report -->
       <div id="report-section" style="display:none">
         <button class="btn btn-secondary" onclick="generateReport()">
@@ -714,9 +721,14 @@ function buildExtraFilters() {
   const extras = [];
   // Exclude 'Searching' state: band B0 + PLMN 255-255 means radio is not camped
   extras.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
-  // Polygon
+  // Polygon — bounding box pre-filter first (skips most rows cheaply),
+  // then exact polygon check only on the remaining bbox-filtered rows
   if (drawnLayer && drawnLayer.getLayers().length > 0) {
     const lls = drawnLayer.getLayers()[0].getLatLngs()[0];
+    const lats = lls.map(ll => ll.lat), lons = lls.map(ll => ll.lng);
+    const pad = 0.01;
+    extras.push(`location_geo_coordinates.2 BETWEEN ${(Math.min(...lats) - pad).toFixed(6)} AND ${(Math.max(...lats) + pad).toFixed(6)}`);
+    extras.push(`location_geo_coordinates.1 BETWEEN ${(Math.min(...lons) - pad).toFixed(6)} AND ${(Math.max(...lons) + pad).toFixed(6)}`);
     const pts = lls.map(ll => `(${ll.lng.toFixed(6)}, ${ll.lat.toFixed(6)})`).join(', ');
     extras.push(`pointInPolygon(location_geo_coordinates, [${pts}])`);
   }
@@ -749,6 +761,9 @@ let lastQueryMs     = 0;      // last query duration in ms
 // Table sort state
 let sortCol = null;
 let sortDir = 1;  // 1 = asc, -1 = desc
+
+// Country / ISO filter state (empty Set = show all)
+let activeIsoFilter = new Set();
 
 // ── Utility helpers ──
 function getLimit() { return parseInt(document.getElementById('limit-select')?.value || 500); }
@@ -1153,6 +1168,8 @@ function processResults(data, anomaly) {
   document.getElementById('ai-response-wrap').style.display = 'none';
 
   sortCol = null; sortDir = 1;
+  activeIsoFilter = new Set();
+  renderCountryFilter();
   renderMarkers();
   renderTable();
 }
@@ -1163,7 +1180,7 @@ function processResults(data, anomaly) {
 function renderMarkers() {
   markers.forEach(m => map.removeLayer(m));
   markers = [];
-  currentResults.forEach((row, i) => {
+  filteredResults().forEach((row, i) => {
     const lat = parseFloat(row.lat), lon = parseFloat(row.lon);
     const conf = row._confidence || 50;
     // Smaller circles: 4–9px radius, opacity driven by confidence
@@ -1182,6 +1199,7 @@ function renderMarkers() {
       ${row.cell_enb != null ? `<div class="popup-row"><span class="lbl">eNB</span><span style="font-family:monospace;font-size:11px">${row.cell_enb}</span></div>` : ''}
       <div class="popup-row"><span class="lbl">PLMN</span><span>${row.network_PLMN || '—'}</span></div>
       <div class="popup-row"><span class="lbl">Operator</span><span>${row.network_operator || '—'}</span></div>
+      ${row.network_iso ? `<div class="popup-row"><span class="lbl">Country</span><span style="font-weight:600;text-transform:uppercase;letter-spacing:0.05em">${row.network_iso}</span></div>` : ''}
       ${row.tech ? `<div class="popup-row"><span class="lbl">RAT</span><span>${row.tech}</span></div>` : ''}
       <div class="popup-row"><span class="lbl">${selectedAnomaly.metricLabel}</span><span>${md}</span></div>
       <div class="popup-row"><span class="lbl">Samples</span><span>${row.counted || '—'}</span></div>
@@ -1214,8 +1232,8 @@ function sortTable(col) {
 }
 
 function sortedResults() {
-  if (!sortCol) return currentResults;
-  return [...currentResults].sort((a, b) => {
+  if (!sortCol) return filteredResults();
+  return [...filteredResults()].sort((a, b) => {
     let va, vb;
     if (sortCol === '_severity') {
       va = SEV_ORDER[a._severity] ?? 3;
@@ -1240,6 +1258,46 @@ function sortedResults() {
   });
 }
 
+// Returns currentResults filtered by active ISO selection
+function filteredResults() {
+  if (activeIsoFilter.size === 0) return currentResults;
+  return currentResults.filter(r => activeIsoFilter.has(r.network_iso || ''));
+}
+
+function renderCountryFilter() {
+  const isos = [...new Set(currentResults.map(r => r.network_iso || '').filter(Boolean))].sort();
+  const section = document.getElementById('country-filter-section');
+  if (isos.length < 2) { section.style.display = 'none'; activeIsoFilter = new Set(); return; }
+
+  section.style.display = 'block';
+  const chips = document.getElementById('country-chips');
+  const render = () => {
+    chips.innerHTML = isos.map(iso => {
+      const active = activeIsoFilter.size === 0 || activeIsoFilter.has(iso);
+      const count  = currentResults.filter(r => (r.network_iso || '') === iso).length;
+      return `<span onclick="toggleIso('${iso}')" style="cursor:pointer;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:600;border:1px solid ${active ? '#3b82f6' : 'var(--card-border)'};background:${active ? 'rgba(59,130,246,0.2)' : 'var(--card)'};color:${active ? '#93c5fd' : 'var(--text-muted)'};user-select:none">${iso.toUpperCase()} <span style="opacity:0.7">${count}</span></span>`;
+    }).join('');
+  };
+  render();
+  window._renderCountryChips = render;
+}
+
+function toggleIso(iso) {
+  if (activeIsoFilter.size === 0) {
+    // First click: select only that ISO (exclude others)
+    const all = [...new Set(currentResults.map(r => r.network_iso || '').filter(Boolean))];
+    activeIsoFilter = new Set(all.filter(i => i !== iso));
+  } else if (activeIsoFilter.has(iso)) {
+    activeIsoFilter.delete(iso);
+    if (activeIsoFilter.size === 0 || activeIsoFilter.size === [...new Set(currentResults.map(r => r.network_iso || '').filter(Boolean))].length - 1) activeIsoFilter = new Set();
+  } else {
+    activeIsoFilter.add(iso);
+  }
+  if (window._renderCountryChips) window._renderCountryChips();
+  renderMarkers();
+  renderTable();
+}
+
 function th(label, col) {
   const active = sortCol === col;
   const arrow  = active ? (sortDir === 1 ? ' ▲' : ' ▼') : ' ⇅';
@@ -1251,7 +1309,7 @@ function renderTable() {
   const isTA0 = selectedAnomaly.id === 'timing_advance_zero';
   document.getElementById('table-head').innerHTML =
     th('Severity', '_severity') + th('Confidence', '_confidence') +
-    `<th>Cell / ECI</th><th>eNB</th><th>PLMN</th><th>Operator</th><th>RAT</th>` +
+    `<th>Cell / ECI</th><th>eNB</th><th>PLMN</th><th>Operator</th><th>Country</th><th>RAT</th>` +
     th(ml, 'metric') +
     (isTA0 ? `<th>Avg RSRP</th><th>EARFCN</th>` : '') +
     th('Samples', 'counted') + th('Devices', 'unique_devices') +
@@ -1271,6 +1329,7 @@ function renderTable() {
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${cellDisp}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${enbDisp}</td>
       <td>${row.network_PLMN || '—'}</td><td>${row.network_operator || '—'}</td>
+      <td style="font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.05em">${row.network_iso || '—'}</td>
       <td style="font-size:0.75rem">${row.tech || '—'}</td>
       <td style="font-family:'JetBrains Mono',monospace">${md}</td>
       ${isTA0 ? `<td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${parseFloat(row.avg_rsrp) > -70 ? '#ef4444' : parseFloat(row.avg_rsrp) > -80 ? '#f59e0b' : 'inherit'};font-weight:${parseFloat(row.avg_rsrp) > -80 ? '600' : '400'}">${row.avg_rsrp != null ? row.avg_rsrp + ' dBm' : '—'}</td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${row.earfcn && row.earfcn != 0 ? row.earfcn + (earfcnLabel(row.earfcn) ? '<span style="color:var(--text-muted);margin-left:4px;font-size:10px">(' + earfcnLabel(row.earfcn) + ')</span>' : '') : '—'}</td>` : ''}
