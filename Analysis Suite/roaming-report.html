@@ -629,7 +629,8 @@ SELECT
     avg(location_geo_coordinates.2)          AS lat,
     avg(location_geo_coordinates.1)          AS lon
 FROM measurements
-WHERE network_isRoaming = true${mccClause}${sourceClause}${timeClause}
+WHERE NOT (band_name = 'B0' AND network_PLMN = '255-255')
+  AND network_isRoaming = true${mccClause}${sourceClause}${timeClause}
 GROUP BY home_source, country, mcc, operator, visited_plmn, tech
 HAVING measurements >= ${minMeas}
 ORDER BY measurements DESC

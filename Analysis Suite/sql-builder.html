@@ -852,7 +852,7 @@
 
         <label class="field">Query Type</label>
         <select id="query-type">
-          <option value="select">SELECT (Signal Analysis)</option>
+          <option value="select">MCC Anomaly</option>
           <option value="cell">Cell/eNB Search</option>
           <option value="tac">TAC Anomaly Detection</option>
           <option value="contributors">User Contributors (Regulator/Operator)</option>
@@ -1037,6 +1037,12 @@
         <input type="text" id="timestamp-col" value="timestamp">
 
         <label class="field">Date Range</label>
+        <div style="display:flex;gap:4px;margin-bottom:8px">
+          <button type="button" class="btn-small" onclick="setTimePreset(1)" style="flex:1">24h</button>
+          <button type="button" class="btn-small" onclick="setTimePreset(7)" style="flex:1">7d</button>
+          <button type="button" class="btn-small" onclick="setTimePreset(30)" style="flex:1">30d</button>
+          <button type="button" class="btn-small" onclick="clearTimePreset()" style="flex:1">All</button>
+        </div>
         <div class="date-row">
           <input type="date" id="date-from" placeholder="From">
           <span>→</span>
@@ -1477,6 +1483,22 @@ function initHourRange() {
   toSel.addEventListener('change', generateSQL);
 }
 
+function setTimePreset(days) {
+  const now = new Date();
+  const from = new Date(now.getTime() - days * 86400000);
+  document.getElementById('date-from').value = from.toISOString().slice(0, 10);
+  document.getElementById('date-to').value = now.toISOString().slice(0, 10);
+  document.getElementById('use-timeline').checked = true;
+  generateSQL();
+}
+
+function clearTimePreset() {
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  document.getElementById('use-timeline').checked = false;
+  generateSQL();
+}
+
 // Returns the ClickHouse SQL condition for hour-of-day filter, or null.
 // `html` param: if true, wraps keywords in <span> for syntax highlighting.
 function getHourRangeCondition(timestampCol, html) {
@@ -1607,7 +1629,7 @@ function renderGridHeatmap(data) {
   clearGridHeat();
 
   // Parse numeric fields (ClickHouse JSON returns strings)
-  data.forEach(d => { d.samples = parseInt(d.samples) || 0; d.devices = parseInt(d.devices) || 0; });
+  data.forEach(d => { d.samples = parseInt(d.samples) || 0; d.devices = Math.max(parseInt(d.devices) || 0, d.samples > 0 ? 1 : 0); });
 
   const maxSamples = Math.max(...data.map(d => d.samples));
   const logMax = Math.log10(maxSamples + 1);
@@ -2136,6 +2158,8 @@ function getRawContributorsSQL() {
   sql += 'WHERE\n';
 
   let conditions = [];
+  // Exclude 'Searching' state (band B0 + PLMN 255-255)
+  conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
   conditions.push('deviceInfo_deviceId IS NOT NULL');
 
   // Add polygon filters
@@ -2238,6 +2262,8 @@ function getRawSQL() {
     sql += `WHERE\n`;
 
     let conditions = [];
+    // Exclude 'Searching' state (band B0 + PLMN 255-255)
+    conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
     if (excludeMcc && filterMcc) {
       conditions.push(`network_mcc != '${filterMcc}'`);
     }
@@ -2300,6 +2326,8 @@ function getRawSQL() {
     sql += `WHERE\n`;
 
     let conditions = [];
+    // Exclude 'Searching' state (band B0 + PLMN 255-255)
+    conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
     conditions.push(`(cell_eci IS NOT NULL OR cell_lac IS NOT NULL)`);
     conditions.push(`network_mcc IS NOT NULL`);
 
@@ -2373,6 +2401,8 @@ function getRawSQL() {
     sql += `WHERE\n`;
 
     let conditions = [];
+    // Exclude 'Searching' state (band B0 + PLMN 255-255)
+    conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
 
     // Always apply polygon filter when drawn (unless "search globally" is checked)
     if (hasPolygons && !cellUsePolygon) {
@@ -2740,8 +2770,8 @@ function renderContributorsOnMap(data) {
   clearContributorLayers();
   if (!data || data.length === 0) return;
 
-  // Parse numeric fields (ClickHouse JSON returns strings)
-  data.forEach(d => { d.unique_users = parseInt(d.unique_users) || 0; d.samples = parseInt(d.samples) || 0; });
+  // Parse numeric fields (ClickHouse JSON returns strings) — ensure at least 1 user if samples exist
+  data.forEach(d => { d.samples = parseInt(d.samples) || 0; d.unique_users = Math.max(parseInt(d.unique_users) || 0, d.samples > 0 ? 1 : 0); });
 
   contributorMapData = data;
 
@@ -3288,6 +3318,8 @@ function generateCellSearchSQL() {
   sql += `<span class="keyword">WHERE</span>\n`;
 
   let conditions = [];
+  // Exclude 'Searching' state (band B0 + PLMN 255-255)
+  conditions.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
 
   // Always apply polygon filter when drawn (unless "search globally" is checked)
   if (hasPolygons && !usePolygon) {
@@ -3425,6 +3457,8 @@ function generateContributorsSQL() {
   sql += `<span class="keyword">WHERE</span>\n`;
 
   let conditions = [];
+  // Exclude 'Searching' state (band B0 + PLMN 255-255)
+  conditions.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
   conditions.push(`deviceInfo_deviceId <span class="keyword">IS NOT NULL</span>`);
 
   // Add polygon filters
@@ -3539,6 +3573,8 @@ function generateSQL() {
       sql += `<span class="keyword">WHERE</span>\n`;
 
       let conditions = [];
+      // Exclude 'Searching' state (band B0 + PLMN 255-255)
+      conditions.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
 
       if (excludeMcc && filterMcc) {
         conditions.push(`network_mcc != <span class="string">'${filterMcc}'</span>`);
@@ -3603,6 +3639,8 @@ function generateSQL() {
       sql += `<span class="keyword">WHERE</span>\n`;
 
       let conditions = [];
+      // Exclude 'Searching' state (band B0 + PLMN 255-255)
+      conditions.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
       conditions.push(`(<span class="keyword">cell_eci IS NOT NULL OR</span> cell_lac <span class="keyword">IS NOT NULL</span>)`);
       conditions.push(`network_mcc <span class="keyword">IS NOT NULL</span>`);
 
@@ -4016,8 +4054,15 @@ function generateContributorsInsightReport() {
   const hasPlmn = data[0].hasOwnProperty('network_PLMN');
 
   // Calculate aggregate statistics
-  const totalUsers = data.reduce((sum, r) => sum + parseInt(r.unique_users || 0), 0);
-  const totalSamples = data.reduce((sum, r) => sum + parseInt(r.total_samples || 0), 0);
+  // Ensure each row with samples has at least 1 user (device IDs may be null/empty but samples prove presence)
+  data.forEach(r => {
+    const users = parseInt(r.unique_users || 0);
+    const samples = parseInt(r.total_samples || 0);
+    r.unique_users = Math.max(users, samples > 0 ? 1 : 0);
+    r.total_samples = samples;
+  });
+  const totalUsers = data.reduce((sum, r) => sum + r.unique_users, 0);
+  const totalSamples = data.reduce((sum, r) => sum + r.total_samples, 0);
 
   // Find date range
   let firstDate = null, lastDate = null;
@@ -4101,12 +4146,14 @@ function generateContributorsInsightReport() {
       .sort((a, b) => b.users - a.users);
   }
 
-  // Tech breakdown
+  // Tech breakdown (skip invalid values like NOSIGNAL, empty, Unknown)
+  const INVALID_TECHS = ['NOSIGNAL', 'Unknown', '', 'NONE', 'NO_SIGNAL'];
   let techData = [];
   if (hasTech) {
     const techMap = {};
     data.forEach(r => {
-      const t = r.tech || 'Unknown';
+      const t = (r.tech || '').trim();
+      if (!t || INVALID_TECHS.includes(t)) return;
       if (!techMap[t]) techMap[t] = { users: 0, samples: 0 };
       techMap[t].users += parseInt(r.unique_users || 0);
       techMap[t].samples += parseInt(r.total_samples || 0);

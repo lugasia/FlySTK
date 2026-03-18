@@ -167,6 +167,26 @@
     .preset-btn { flex: 1; padding: 4px 0; font-size: 10px; font-weight: 600; font-family: 'Inter', sans-serif; border: 1px solid var(--card-border); border-radius: 5px; background: var(--navy); color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
     .preset-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+    /* ── Place Search ── */
+    .place-results {
+      display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
+      background: var(--card); border: 1px solid var(--card-border); border-top: none;
+      border-radius: 0 0 8px 8px; max-height: 280px; overflow-y: auto;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .place-results.visible { display: block; }
+    .place-result-item { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--card-border); display: flex; align-items: flex-start; gap: 10px; transition: background 0.15s; }
+    .place-result-item:last-child { border-bottom: none; }
+    .place-result-item:hover { background: rgba(59,130,246,0.1); }
+    .place-result-item .place-icon { font-size: 18px; color: var(--accent); margin-top: 1px; flex-shrink: 0; }
+    .place-result-item .place-name { font-size: 13px; font-weight: 500; color: var(--text); }
+    .place-result-item .place-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .place-result-item .place-type-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(59,130,246,0.15); color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+    .place-preview { margin-top: 10px; padding: 12px; background: var(--navy); border: 1px solid var(--accent); border-radius: 8px; }
+    .place-preview-header { display: flex; justify-content: space-between; align-items: flex-start; }
+    .place-search-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--card-border); border-top-color: var(--accent); border-radius: 50%; animation: plspin 0.6s linear infinite; }
+    @keyframes plspin { to { transform: rotate(360deg); } }
+
     /* ── Sortable table headers ── */
     .sortable-th { cursor: pointer; user-select: none; }
     .sortable-th:hover { color: var(--text); }
@@ -242,6 +262,34 @@
       <!-- Filters -->
       <div id="filters-section" style="display:none">
         <div class="sb-label">3. Filters <span style="font-weight:400;font-size:10px;color:var(--text-muted)">(optional — leave empty for all data)</span></div>
+
+        <!-- Place Search -->
+        <div style="margin-bottom:10px">
+          <div class="param-label" style="font-size:10px;margin-bottom:5px"><span class="material-icons" style="font-size:14px;vertical-align:middle;margin-right:4px">travel_explore</span> Place Search</div>
+          <div style="position:relative">
+            <input class="param-inp" type="text" id="place-search" placeholder="Search country, city, municipality..." autocomplete="off">
+            <span class="material-icons" id="place-search-icon" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:18px;color:var(--text-muted);pointer-events:none">search</span>
+            <div id="place-results" class="place-results"></div>
+          </div>
+          <div id="place-preview" class="place-preview" style="display:none">
+            <div class="place-preview-header">
+              <div>
+                <div id="place-preview-name" style="font-weight:600;font-size:14px"></div>
+                <div id="place-preview-type" style="font-size:11px;color:var(--text-muted);margin-top:2px"></div>
+              </div>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-sm" onclick="approveSearchPolygon()" style="background:var(--green);color:#fff;font-weight:600;display:flex;align-items:center;gap:4px" title="Add polygon">
+                  <span class="material-icons" style="font-size:14px">check</span> Use
+                </button>
+                <button class="btn btn-sm" onclick="cancelSearchPolygon()" style="background:var(--red);color:#fff;display:flex;align-items:center;gap:4px" title="Cancel">
+                  <span class="material-icons" style="font-size:14px">close</span>
+                </button>
+              </div>
+            </div>
+            <div id="place-preview-meta" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>
+          </div>
+        </div>
+
         <div class="filter-row">
           <div class="poly-status" id="poly-status">No polygon — querying all locations</div>
           <button class="btn-icon" id="poly-draw-btn" title="Draw polygon on map" onclick="startDraw()">
@@ -478,7 +526,36 @@ const ANOMALY_LIBRARY = [
     },
     generateSQL(p, extras) {
       const w = buildWhere([`signal_timingAdvance IS NOT NULL`, `cell_eci != 0`], extras);
-      return `-- Timing Advance = 0 Detection — ALL results CRITICAL\n-- Uses unique samples (sample_id) to avoid duplicate counting\nSELECT\n    ${CELL_SEL},\n    network_PLMN, network_operator, network_iso, tech,\n    uniqExactIf(sample_id, signal_timingAdvance = 0) AS ta_zero_count,\n    uniqExact(sample_id) AS counted,\n    uniqExact(deviceInfo_deviceId) AS unique_devices,\n    min(timestamp) AS first_seen,\n    max(timestamp) AS last_seen,\n    avg(location_geo_coordinates.2) AS lat,\n    avg(location_geo_coordinates.1) AS lon\nFROM measurements\n${w}\nGROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso, tech\nHAVING ta_zero_count >= ${p.min_count}\nORDER BY ta_zero_count DESC\nLIMIT 500;`;
+      return `-- Timing Advance = 0 Detection — ALL results CRITICAL
+-- Only counts the FIRST TA sample per device per cell to avoid
+-- stale TA=0 repeats (UE keeps old TA until network sends update)
+SELECT
+    ${CELL_SEL},
+    network_PLMN, network_operator, network_iso, tech,
+    countIf(first_ta = 0) AS ta_zero_count,
+    count() AS counted,
+    uniqExact(device_id) AS unique_devices,
+    min(first_seen) AS first_seen,
+    max(first_seen) AS last_seen,
+    avg(lat) AS lat,
+    avg(lon) AS lon
+FROM (
+    SELECT
+        coalesce(nullIf(deviceInfo_deviceId,''), nullIf(deviceInfo_imei,''), toString(sample_id)) AS device_id,
+        ${CELL_SEL},
+        network_PLMN, network_operator, network_iso, tech,
+        argMin(signal_timingAdvance, timestamp) AS first_ta,
+        min(timestamp) AS first_seen,
+        avg(location_geo_coordinates.2) AS lat,
+        avg(location_geo_coordinates.1) AS lon
+    FROM measurements
+    ${w}
+    GROUP BY device_id, ${CELL_GRP}, network_PLMN, network_operator, network_iso, tech
+)
+GROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso, tech
+HAVING ta_zero_count >= ${p.min_count}
+ORDER BY ta_zero_count DESC
+LIMIT 500;`;
     }
   },
   {
@@ -567,6 +644,8 @@ function buildWhere(baseConditions, extras = []) {
 
 function buildExtraFilters() {
   const extras = [];
+  // Exclude 'Searching' state: band B0 + PLMN 255-255 means radio is not camped
+  extras.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
   // Polygon
   if (drawnLayer && drawnLayer.getLayers().length > 0) {
     const lls = drawnLayer.getLayers()[0].getLatLngs()[0];
@@ -1628,6 +1707,196 @@ function renderAIResponse(text) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// PLACE SEARCH (Nominatim / OpenStreetMap)
+// ══════════════════════════════════════════════════════════════
+let searchPreviewLayer = null;
+let searchPreviewData = null;
+let placeSearchTimeout = null;
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function initPlaceSearch() {
+  const input = document.getElementById('place-search');
+  const results = document.getElementById('place-results');
+  input.addEventListener('input', () => {
+    clearTimeout(placeSearchTimeout);
+    const q = input.value.trim();
+    if (q.length < 2) { results.classList.remove('visible'); return; }
+    document.getElementById('place-search-icon').innerHTML = '<div class="place-search-spinner"></div>';
+    placeSearchTimeout = setTimeout(() => searchPlaces(q), 400);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { results.classList.remove('visible'); input.blur(); }
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#place-search') && !e.target.closest('#place-results')) results.classList.remove('visible');
+  });
+}
+
+async function searchPlaces(query) {
+  const results = document.getElementById('place-results');
+  const icon = document.getElementById('place-search-icon');
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&polygon_geojson=0&addressdetails=1&extratags=1`;
+    const resp = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+    const data = await resp.json();
+    icon.innerHTML = 'search';
+    if (!data || data.length === 0) {
+      results.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;text-align:center">No results found</div>';
+      results.classList.add('visible');
+      return;
+    }
+    results.innerHTML = data.map((place, idx) => {
+      const typeIcon = getPlaceIcon(place.type, place.class);
+      const typeBadge = formatPlaceType(place.type, place.class);
+      const name = place.display_name.split(',').slice(0, 3).join(', ');
+      const full = place.display_name;
+      return `<div class="place-result-item" onclick="selectPlace(${idx})" title="${escapeHtml(full)}">
+        <span class="material-icons place-icon">${typeIcon}</span>
+        <div style="flex:1;min-width:0">
+          <div class="place-name">${escapeHtml(name)}</div>
+          <div class="place-detail">${escapeHtml(full)}</div>
+        </div>
+        <span class="place-type-badge">${typeBadge}</span>
+      </div>`;
+    }).join('');
+    results._data = data;
+    results.classList.add('visible');
+  } catch (err) {
+    console.error('[Place Search] Error:', err);
+    icon.innerHTML = 'search';
+    results.innerHTML = '<div style="padding:12px;color:var(--red);font-size:12px;text-align:center">Search failed — try again</div>';
+    results.classList.add('visible');
+  }
+}
+
+function getPlaceIcon(type, cls) {
+  if (cls === 'boundary' || type === 'administrative') return 'account_balance';
+  if (type === 'country') return 'flag';
+  if (type === 'state' || type === 'province' || type === 'region') return 'map';
+  if (type === 'city' || type === 'town' || type === 'village') return 'location_city';
+  if (type === 'suburb' || type === 'neighbourhood') return 'holiday_village';
+  return 'place';
+}
+
+function formatPlaceType(type, cls) {
+  if (type === 'administrative') return cls === 'boundary' ? 'Admin Region' : type;
+  return type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, ' ');
+}
+
+async function selectPlace(idx) {
+  const results = document.getElementById('place-results');
+  const place = results._data[idx];
+  if (!place) return;
+  results.classList.remove('visible');
+  document.getElementById('place-search-icon').innerHTML = '<div class="place-search-spinner"></div>';
+  try {
+    const url = `https://nominatim.openstreetmap.org/details.php?osmtype=${place.osm_type[0].toUpperCase()}&osmid=${place.osm_id}&polygon_geojson=1&format=json`;
+    const resp = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+    const detail = await resp.json();
+    document.getElementById('place-search-icon').innerHTML = 'search';
+    if (!detail.geometry || (detail.geometry.type !== 'Polygon' && detail.geometry.type !== 'MultiPolygon')) {
+      if (place.boundingbox) {
+        const bb = place.boundingbox.map(Number);
+        const coords = [[bb[0], bb[2]], [bb[0], bb[3]], [bb[1], bb[3]], [bb[1], bb[2]]];
+        showSearchPreview(place, coords);
+      } else {
+        alert('No boundary polygon available for this place. Try a larger administrative region.');
+      }
+      return;
+    }
+    let coords;
+    if (detail.geometry.type === 'Polygon') {
+      coords = detail.geometry.coordinates[0].map(c => [c[1], c[0]]);
+    } else {
+      let largest = detail.geometry.coordinates[0][0];
+      for (const poly of detail.geometry.coordinates) {
+        if (poly[0].length > largest.length) largest = poly[0];
+      }
+      coords = largest.map(c => [c[1], c[0]]);
+    }
+    if (coords.length > 500) {
+      coords = simplifyPolygon(coords, coords.length > 2000 ? 0.01 : 0.005);
+    }
+    showSearchPreview(place, coords);
+  } catch (err) {
+    console.error('[Place Search] Polygon fetch error:', err);
+    document.getElementById('place-search-icon').innerHTML = 'search';
+    if (place.boundingbox) {
+      const bb = place.boundingbox.map(Number);
+      const coords = [[bb[0], bb[2]], [bb[0], bb[3]], [bb[1], bb[3]], [bb[1], bb[2]]];
+      showSearchPreview(place, coords);
+    } else {
+      alert('Could not fetch boundary. Try again.');
+    }
+  }
+}
+
+function simplifyPolygon(coords, tolerance) {
+  if (coords.length <= 4) return coords;
+  function perpendicularDist(pt, lineStart, lineEnd) {
+    const dx = lineEnd[0] - lineStart[0], dy = lineEnd[1] - lineStart[1];
+    const norm = Math.sqrt(dx * dx + dy * dy);
+    if (norm === 0) return Math.sqrt((pt[0] - lineStart[0]) ** 2 + (pt[1] - lineStart[1]) ** 2);
+    return Math.abs(dy * pt[0] - dx * pt[1] + lineEnd[0] * lineStart[1] - lineEnd[1] * lineStart[0]) / norm;
+  }
+  function dpSimplify(points, tol) {
+    if (points.length <= 2) return points;
+    let maxDist = 0, maxIdx = 0;
+    for (let i = 1; i < points.length - 1; i++) {
+      const d = perpendicularDist(points[i], points[0], points[points.length - 1]);
+      if (d > maxDist) { maxDist = d; maxIdx = i; }
+    }
+    if (maxDist > tol) {
+      const left = dpSimplify(points.slice(0, maxIdx + 1), tol);
+      const right = dpSimplify(points.slice(maxIdx), tol);
+      return left.slice(0, -1).concat(right);
+    }
+    return [points[0], points[points.length - 1]];
+  }
+  const simplified = dpSimplify(coords, tolerance);
+  console.log(`[Place Search] Simplified polygon: ${coords.length} → ${simplified.length} points`);
+  return simplified;
+}
+
+function showSearchPreview(place, coords) {
+  if (searchPreviewLayer) { map.removeLayer(searchPreviewLayer); searchPreviewLayer = null; }
+  searchPreviewLayer = L.polygon(coords, {
+    color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.15, weight: 2, dashArray: '6, 4'
+  }).addTo(map);
+  map.fitBounds(searchPreviewLayer.getBounds(), { padding: [40, 40] });
+  searchPreviewData = { place, coords };
+  const shortName = place.display_name.split(',').slice(0, 2).join(', ');
+  document.getElementById('place-preview-name').textContent = shortName;
+  document.getElementById('place-preview-type').textContent = formatPlaceType(place.type, place.class) + ' — ' + coords.length + ' vertices';
+  document.getElementById('place-preview-meta').textContent = place.display_name;
+  document.getElementById('place-preview').style.display = 'block';
+}
+
+function approveSearchPolygon() {
+  if (!searchPreviewData) return;
+  const { place, coords } = searchPreviewData;
+  if (searchPreviewLayer) { map.removeLayer(searchPreviewLayer); searchPreviewLayer = null; }
+  // Clear any existing drawn polygon and add the place polygon
+  drawnLayer.clearLayers();
+  const layer = L.polygon(coords, { color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.2, weight: 2 });
+  drawnLayer.addLayer(layer);
+  searchPreviewData = null;
+  document.getElementById('place-preview').style.display = 'none';
+  document.getElementById('place-search').value = '';
+  updatePolyStatus();
+  refreshSQL();
+}
+
+function cancelSearchPolygon() {
+  if (searchPreviewLayer) { map.removeLayer(searchPreviewLayer); searchPreviewLayer = null; }
+  searchPreviewData = null;
+  document.getElementById('place-preview').style.display = 'none';
+}
+
+// ══════════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
@@ -1635,6 +1904,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderAnomalyList();
   loadCredentials();
   loadAIKey();
+  initPlaceSearch();
 
   // Refresh SQL when time filters change
   document.getElementById('time-from').addEventListener('change', refreshSQL);
