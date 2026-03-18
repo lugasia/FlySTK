@@ -3862,6 +3862,13 @@ document.addEventListener('DOMContentLoaded', () => {
   ['exclude-mcc', 'include-mcc', 'use-timeline'].forEach(id => {
     document.getElementById(id).addEventListener('change', generateSQL);
   });
+
+  // Initialize button row visibility for default query type (MCC Anomaly = 'select')
+  const initQueryType = document.getElementById('query-type').value;
+  document.getElementById('mcc-report-row').style.display = initQueryType === 'select' ? 'flex' : 'none';
+  document.getElementById('tac-report-row').style.display = initQueryType === 'tac' ? 'flex' : 'none';
+  document.getElementById('ml-btn-row').style.display = initQueryType === 'cell' ? 'flex' : 'none';
+  document.getElementById('contributors-report-row').style.display = initQueryType === 'contributors' ? 'flex' : 'none';
 });
 
 
@@ -4017,9 +4024,28 @@ function clearMccAnomalyLayer() {
   if (el) el.remove();
 }
 
+function applyPlmnFilter() {
+  const checkboxes = document.querySelectorAll('#mcc-plmn-checkboxes input[type="checkbox"]');
+  const selected = [];
+  checkboxes.forEach(cb => { if (cb.checked) selected.push(cb.value); });
+  filterMccByPlmn(selected);
+}
+
+function selectAllPlmns() {
+  document.querySelectorAll('#mcc-plmn-checkboxes input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+  filterMccByPlmn([]);
+}
+
+function clearAllPlmns() {
+  document.querySelectorAll('#mcc-plmn-checkboxes input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+  filterMccByPlmn([]);
+}
+
 function filterMccByPlmn(plmnFilter) {
+  // Accept both legacy string and new array format
+  const selectedPlmns = Array.isArray(plmnFilter) ? plmnFilter : (plmnFilter ? [plmnFilter] : []);
   if (!mccAnomalyData || mccAnomalyData.length === 0) return;
-  const filtered = plmnFilter ? mccAnomalyData.filter(d => d.network_PLMN === plmnFilter) : mccAnomalyData;
+  const filtered = selectedPlmns.length > 0 ? mccAnomalyData.filter(d => selectedPlmns.includes(d.network_PLMN)) : mccAnomalyData;
   // Re-render markers only (keep legend intact)
   if (mccAnomalyLayer) { map.removeLayer(mccAnomalyLayer); }
   mccAnomalyLayer = L.layerGroup();
@@ -4157,32 +4183,32 @@ function addMccAnomalyLegend(plmnSet, colorMap, stats, totalRecords) {
   ctrl.id = 'mcc-anomaly-legend';
   ctrl.style.cssText = 'position:absolute;top:12px;right:12px;z-index:1000;background:rgba(10,22,40,0.92);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:12px;padding:12px;color:var(--text);font-family:Inter,sans-serif;font-size:12px;min-width:220px;max-height:400px;overflow-y:auto;';
 
-  // PLMN filter dropdown
+  // PLMN multi-select checkboxes
+  const sortedPlmns = plmnSet.slice().sort((a, b) => (stats[b]?.records || 0) - (stats[a]?.records || 0));
   let html = `<div style="font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
     <span class="material-icons" style="font-size:16px;color:var(--red)">security</span>
     MCC Anomaly — ${totalRecords.toLocaleString()} records
   </div>
-  <div style="margin-bottom:8px">
-    <select id="mcc-plmn-filter" onchange="filterMccByPlmn(this.value)" style="width:100%;padding:4px 6px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:11px;cursor:pointer">
-      <option value="">All PLMNs</option>
-      ${plmnSet.sort((a, b) => (stats[b]?.records || 0) - (stats[a]?.records || 0)).map(p => {
+  <div style="margin-bottom:10px">
+    <div style="display:flex;gap:4px;margin-bottom:6px;align-items:center">
+      <span style="font-size:10px;color:var(--sub);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;flex:1">Filter PLMNs</span>
+      <button onclick="selectAllPlmns()" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer">All</button>
+      <button onclick="clearAllPlmns()" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer">None</button>
+    </div>
+    <div id="mcc-plmn-checkboxes" style="max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+      ${sortedPlmns.map(p => {
         const m = (p.replace('-','') || '').slice(0,3);
         const mi = typeof MCC_TABLE !== 'undefined' ? MCC_TABLE[m] : null;
-        return `<option value="${escapeHtml(p)}">${escapeHtml(p)} ${mi ? mi.name : ''} (${(stats[p]?.records||0).toLocaleString()})</option>`;
+        const label = mi ? mi.name : '';
+        return `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:2px 4px;border-radius:4px" onmouseover="this.style.background='rgba(59,130,246,0.08)'" onmouseout="this.style.background='transparent'">
+          <input type="checkbox" checked value="${escapeHtml(p)}" onchange="applyPlmnFilter()" style="accent-color:${colorMap[p]};cursor:pointer;width:12px;height:12px">
+          <div style="width:8px;height:8px;border-radius:50%;background:${colorMap[p]};flex-shrink:0"></div>
+          <span style="flex:1;font-size:11px">${escapeHtml(p)}${label ? ' <span style=\\'color:var(--sub)\\'>' + label + '</span>' : ''}</span>
+          <span style="color:var(--sub);font-size:10px">${(stats[p]?.records||0).toLocaleString()}</span>
+        </label>`;
       }).join('')}
-    </select>
+    </div>
   </div>`;
-
-  plmnSet.slice(0, 15).forEach(plmn => {
-    const mcc = (plmn.replace('-', '') || '').slice(0, 3);
-    const mccInfo = typeof MCC_TABLE !== 'undefined' ? MCC_TABLE[mcc] : null;
-    const flag = mccInfo ? mccInfo.name : '';
-    html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-      <div style="width:10px;height:10px;border-radius:50%;background:${colorMap[plmn]};flex-shrink:0"></div>
-      <span style="flex:1">${escapeHtml(plmn)} ${flag ? '<span style="color:var(--sub)">' + flag + '</span>' : ''}</span>
-      <span style="color:var(--sub)">${(stats[plmn]?.records || 0).toLocaleString()}</span>
-    </div>`;
-  });
 
   html += `<button onclick="clearMccAnomalyLayer()" style="margin-top:8px;width:100%;padding:5px;border-radius:6px;border:1px solid var(--border);background:var(--red);color:#fff;font-size:11px;cursor:pointer">Clear</button>`;
   ctrl.innerHTML = html;
