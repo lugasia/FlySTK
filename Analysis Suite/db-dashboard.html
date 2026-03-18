@@ -6,6 +6,8 @@
   <title>Advanced Cell Report — DB Dashboard</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -197,6 +199,22 @@
     ::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 3px; }
 
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+    /* ── WORLD MAP ── */
+    #world-map-container { height: 340px; border-radius: 8px; overflow: hidden; background: #0a1628; }
+    .leaflet-container { background: #0a1628 !important; }
+    .leaflet-tile-pane { filter: brightness(1.5) contrast(1.05) saturate(0.9); }
+    .map-bubble-tooltip {
+      background: #1e3a5f !important; color: var(--text) !important;
+      border: 1px solid var(--card-border) !important; border-radius: 6px !important;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+      font-family: 'Inter', sans-serif !important; font-size: 12px !important;
+      padding: 6px 10px !important;
+    }
+    .map-bubble-tooltip::before { display: none !important; }
+    .leaflet-control-attribution { display: none !important; }
+    .leaflet-control-zoom a { background: var(--card2) !important; color: var(--text) !important; border-color: var(--card-border) !important; }
+    .leaflet-control-zoom a:hover { background: var(--card-border) !important; }
   </style>
 </head>
 <body>
@@ -425,6 +443,20 @@ function timeWhere() {
   return clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
 }
 
+// Always anchors to the last 60 days so the chart never shows 1970 data
+function dailyTimeWhere() {
+  const f   = document.getElementById('time-from').value;
+  const t   = document.getElementById('time-to').value;
+  const src = document.getElementById('filter-source').value.trim();
+  const iso = document.getElementById('filter-iso').value.trim().toUpperCase();
+  const clauses = ['toDate(timestamp) >= today() - INTERVAL 60 DAY'];
+  if (f) clauses.push(`timestamp >= '${f.replace('T',' ')}:00'`);
+  if (t) clauses.push(`timestamp <= '${t.replace('T',' ')}:00'`);
+  if (src) clauses.push(`source = '${src.replace(/'/g,"''")}'`);
+  if (iso) clauses.push(`upper(network_iso) = '${iso.replace(/'/g,"''")}'`);
+  return 'WHERE ' + clauses.join(' AND ');
+}
+
 function setProgress(p) {
   document.getElementById('loading-bar').style.width = p + '%';
 }
@@ -448,6 +480,7 @@ async function loadDashboard() {
   function safe(p) { return p.catch(e => { console.warn(e.message); return []; }); }
 
   try {
+    const dw = dailyTimeWhere();
     const [kpi, growth, bySource, byTech, byCountry, byOperator, signalQ, speedQ, byBand, byDevice, daily] = await Promise.all([
 
       // KPI: totals
@@ -526,9 +559,9 @@ async function loadDashboard() {
         FROM measurements ${w} WHERE deviceInfo_deviceModel != ''
         GROUP BY model ORDER BY n DESC LIMIT 12`)),
 
-      // Daily Activity (last 60 days)
+      // Daily Activity (last 60 days — always anchored to today)
       safe(runQuery(`SELECT toDate(timestamp) AS day, count() AS n
-        FROM measurements ${w} GROUP BY day ORDER BY day ASC LIMIT 60`)),
+        FROM measurements ${dw} GROUP BY day ORDER BY day ASC`)),
     ]);
 
     setProgress(90);
@@ -589,6 +622,86 @@ function hbar(items, valKey, labelKey, total) {
       <div class="bar-track"><div class="bar-fill" style="width:${pctW}%;background:${color}"></div></div>
     </div>`;
   }).join('');
+}
+
+// ══════════════════════════════════════════
+// WORLD MAP
+// ══════════════════════════════════════════
+const ISO_COORDS = {
+  AF:[33.9,67.7],AL:[41.2,20.2],DZ:[28.0,1.7],AO:[-11.2,17.9],AR:[-38.4,-63.6],
+  AM:[40.1,45.0],AU:[-25.3,133.8],AT:[47.5,14.6],AZ:[40.1,47.5],BD:[23.7,90.4],
+  BE:[50.5,4.5],BY:[53.7,28.0],BJ:[9.3,2.3],BO:[-16.3,-63.6],BA:[44.0,17.7],
+  BW:[-22.3,24.7],BR:[-14.2,-51.9],BG:[42.7,25.5],CM:[4.0,11.5],CA:[56.1,-106.3],
+  CF:[6.6,20.9],TD:[15.5,18.7],CL:[-35.7,-71.5],CN:[35.9,104.2],CO:[4.6,-74.1],
+  CD:[-4.0,21.8],CG:[-0.2,15.8],CR:[9.7,-83.8],CI:[7.5,-5.5],HR:[45.1,15.2],
+  CU:[21.5,-79.5],CY:[35.1,33.4],CZ:[49.8,15.5],DK:[56.3,9.5],DO:[18.7,-70.2],
+  EC:[-1.8,-78.2],EG:[26.8,30.8],SV:[13.8,-88.9],ET:[9.1,40.5],EE:[58.6,25.0],
+  FI:[64.0,26.0],FR:[46.2,2.2],GA:[-0.8,11.6],DE:[51.2,10.4],GH:[7.9,-1.0],
+  GR:[39.1,21.8],GT:[15.8,-90.2],GN:[11.0,-10.9],GW:[12.0,-15.0],GY:[4.9,-59.0],
+  HN:[15.2,-86.2],HU:[47.2,19.5],IS:[64.9,-18.5],IN:[20.6,78.9],ID:[-0.8,113.9],
+  IR:[32.4,53.7],IQ:[33.2,43.7],IE:[53.4,-8.2],IL:[31.5,34.9],IT:[42.8,12.8],
+  JM:[18.1,-77.3],JP:[36.2,138.3],JO:[30.6,36.2],KZ:[48.0,68.0],KE:[-0.2,37.9],
+  KW:[29.3,47.5],KG:[41.2,74.8],LA:[17.9,102.5],LV:[56.9,24.6],LB:[33.9,35.5],
+  LS:[-29.6,28.2],LR:[6.4,-9.4],LY:[26.3,17.2],LT:[55.2,23.9],LU:[49.8,6.1],
+  MK:[41.6,21.7],MG:[-18.8,46.9],MW:[-13.3,34.3],MY:[4.2,109.5],ML:[17.6,-2.0],
+  MR:[20.3,-10.9],MX:[23.6,-102.6],MD:[47.4,28.4],MN:[46.9,103.8],MA:[31.8,-7.1],
+  MZ:[-18.7,35.5],NA:[-22.0,17.1],NL:[52.3,5.3],NZ:[-40.9,174.9],NI:[12.9,-85.2],
+  NE:[17.6,8.1],NG:[9.1,8.7],NO:[64.5,17.9],OM:[21.0,57.0],PK:[30.4,69.3],
+  PA:[8.5,-80.8],PG:[-6.3,143.9],PY:[-23.4,-58.4],PE:[-9.2,-75.0],PH:[12.9,121.8],
+  PL:[52.1,19.4],PT:[39.4,-8.2],PS:[31.9,35.2],PR:[18.2,-66.6],RO:[45.9,24.9],
+  RU:[61.5,90.4],RW:[-1.9,29.9],SA:[23.9,45.1],SN:[14.5,-14.5],RS:[44.0,21.0],
+  SL:[8.5,-11.8],SK:[48.7,19.7],SI:[46.2,14.8],SO:[5.2,46.2],ZA:[-28.5,24.7],
+  SS:[7.8,29.7],ES:[40.5,-3.7],LK:[7.9,80.8],SD:[15.6,32.5],SR:[3.9,-56.0],
+  SZ:[-26.5,31.5],SE:[63.1,18.6],CH:[46.8,8.2],SY:[34.8,38.9],TW:[23.7,120.9],
+  TJ:[38.9,71.3],TZ:[-6.4,34.9],TH:[15.9,100.9],TG:[8.6,0.8],TT:[10.7,-61.2],
+  TN:[33.9,9.5],TR:[38.9,35.2],TM:[38.9,59.6],UG:[1.4,32.3],UA:[48.4,31.2],
+  AE:[23.4,53.8],GB:[52.4,-1.9],US:[37.1,-95.7],UY:[-32.5,-55.8],UZ:[41.4,64.6],
+  VE:[6.4,-66.6],VN:[16.1,107.8],YE:[15.6,48.5],ZM:[-13.1,27.8],ZW:[-19.0,29.2],
+  KR:[36.6,127.9],KP:[40.3,127.5],SG:[1.4,103.8],HK:[22.4,114.1],TW:[23.7,120.9],
+};
+
+let _worldMap = null;
+
+function renderWorldMap(byCountry) {
+  if (_worldMap) { try { _worldMap.remove(); } catch(e){} _worldMap = null; }
+  const container = document.getElementById('world-map-container');
+  if (!container) return;
+
+  _worldMap = L.map(container, {
+    zoomControl: true, scrollWheelZoom: true, attributionControl: false,
+    minZoom: 1, maxZoom: 8
+  }).setView([20, 15], 2);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 18
+  }).addTo(_worldMap);
+
+  if (!byCountry || !byCountry.length) return;
+
+  const maxN = Math.max(...byCountry.map(r => Number(r.n)));
+
+  byCountry.forEach(r => {
+    const iso = (r.country || '').toUpperCase();
+    const coords = ISO_COORDS[iso];
+    if (!coords) return;
+    const n = Number(r.n);
+    // radius: min 6px, max 50px, scaled by sqrt for visual fairness
+    const radius = 6 + Math.sqrt(n / maxN) * 44;
+
+    const circle = L.circleMarker(coords, {
+      radius,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.45,
+      color: '#60a5fa',
+      weight: 1.5
+    }).addTo(_worldMap);
+
+    const fmtN = n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : n.toLocaleString();
+    circle.bindTooltip(
+      `<div style="font-weight:600;font-size:13px">${iso}</div><div style="color:#94a3b8;margin-top:2px">${fmtN} samples</div>`,
+      { permanent: false, direction: 'top', className: 'map-bubble-tooltip' }
+    );
+  });
 }
 
 // ══════════════════════════════════════════
@@ -881,9 +994,22 @@ function renderDashboard(d) {
         ${dailyHTML}
       </div>
     </div>
+
+    <!-- ROW 6: World Map (full width) -->
+    <div class="dash-grid full">
+      <div class="dash-card">
+        <div class="dash-card-title">
+          <span class="material-icons" style="color:var(--cyan)">travel_explore</span>
+          Global Coverage Map
+          <span style="font-size:10px;font-weight:400;color:var(--text-dim);margin-left:auto">bubble size = relative sample volume · hover for details</span>
+        </div>
+        <div id="world-map-container"></div>
+      </div>
+    </div>
   `;
 
   dash.style.display = 'block';
+  renderWorldMap(d.byCountry);
 }
 </script>
 </body>
