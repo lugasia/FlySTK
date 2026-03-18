@@ -1,6 +1,6 @@
 # Anomaly Detection Algorithms
 ## Complete Technical Reference — All Detectors, All Thresholds, All Logic
-**For team review — 2026-03-12**
+**For team review — 2026-03-18**
 
 ---
 
@@ -11,7 +11,7 @@ The platform has **4 detection engines** across 3 tools:
 | Engine | Tool | Detection Count | Data Source |
 |--------|------|----------------|-------------|
 | [A] TAC Anomaly Detector | `anomaly-detector.html` | 4 classification types | ClickHouse JSON export |
-| [B] Anomaly Workbench | `anomaly-workbench.html` | 8 active methods (2 removed — broken schema) | Live ClickHouse connection |
+| [B] Anomaly Workbench | `anomaly-workbench.html` | 7 active methods (3 removed) | Live ClickHouse connection |
 | [C] Forensic Report | `app.js` → `generateReport()` | 3 detection types | CSV upload (filtered) |
 | [D] Spectra API | `spectra-api/routers/alerts.py` | 4 alert types | Live ClickHouse (modem source only) |
 
@@ -19,16 +19,17 @@ The platform has **4 detection engines** across 3 tools:
 
 ---
 
-## Removed Methods — Broken Schema References
+## Removed Methods
 
-Two methods were removed from the active detector list because they reference fields that **do not exist** in the `measurements` table and silently return 0 rows:
+Three methods are not active in the detector. Two reference fields that do not exist in the `measurements` table. One was removed due to a logic design flaw.
 
-| Removed Method | Missing Field | What Would Be Needed to Restore |
-|---------------|--------------|----------------------------------|
-| ~~B4 — Unregistered Cells~~ | `isRegistered` | Enrich `measurements` with a cell registry join, or maintain a separate `registered_cells` table and query against it |
-| ~~B8 — RF Blackout~~ | `delta_no_signal` | Pre-compute inter-row time gaps per device (window function) and store as a derived/materialized field; not derivable from a raw scan |
+| Removed Method | Reason | What Would Be Needed to Restore |
+|---------------|--------|----------------------------------|
+| ~~Unregistered Cells~~ | Missing field: `isRegistered` | Enrich `measurements` with a cell registry join, or maintain a separate `registered_cells` table |
+| ~~RF Blackout~~ | Missing field: `delta_no_signal` | Pre-compute inter-row time gaps per device via window function and store as materialized field |
+| ~~Multi-Device IMEI Concentration~~ | Logic flaw: counts lifetime unique devices with no time denominator or baseline — fires on every urban cell | Replace with time-windowed rate (unique IMEIs per hour) vs. cell historical baseline |
 
-> **Note:** `deviceInfo_personalId` is also missing from schema but is used in B1 and B7 — the `coalesce()` fallback to `deviceInfo_imei` handles this gracefully with no functional impact.
+> **Note:** `deviceInfo_personalId` is missing from schema but is referenced in B1 and B2 — the `coalesce()` fallback to `deviceInfo_imei` handles this gracefully with no functional impact.
 
 ---
 
@@ -111,7 +112,7 @@ IF none of the above match:
 
 ---
 
-# ENGINE B — Anomaly Workbench (10 Methods)
+# ENGINE B — Anomaly Workbench (7 Methods)
 
 **File:** `anomaly-workbench.html`
 **Input:** Live ClickHouse queries (configurable host/port/credentials)
@@ -120,7 +121,7 @@ IF none of the above match:
 
 ## B — Shared Confidence Scoring Formula
 
-All 10 methods share a single confidence calculation:
+All 7 methods share a single confidence calculation:
 
 ```
 sample_score = min(counted / 25, 1.0)       → saturates at 25 samples (= 100% credit)
@@ -198,13 +199,19 @@ Detects cells where the device appeared to be at zero physical distance from the
 
 **SQL logic:**
 ```sql
-countIf(signal_timingAdvance = 0) AS ta_zero_count
+-- Inner subquery: deduplicate to first TA observation per device per cell
+argMin(signal_timingAdvance, timestamp) AS first_ta
+min(timestamp) AS dev_first_seen
+max(timestamp) AS dev_last_seen
+
+-- Outer query:
+countIf(first_ta = 0) AS ta_zero_count
 HAVING ta_zero_count ≥ [min_count]   -- default: 5
 ```
 
 **Severity:** ALL results → CRITICAL (no tiering)
 
-**Rationale:** TA=0 means the round-trip signal time implies the device is ≤78 meters from the transmitter. For a fixed tower, this is physically impossible for most measurement scenarios. Consistent with an IMSI-catcher that is physically adjacent to the victim device, or a rogue BTS broadcasting TA=0 to force association.
+**Rationale:** TA=0 means the round-trip signal time implies the device is ≤78 meters from the transmitter. For a fixed tower, this is physically impossible for most measurement scenarios. Consistent with an IMSI-catcher physically adjacent to the victim device, or a rogue BTS broadcasting TA=0 to force association.
 
 ---
 
@@ -295,55 +302,7 @@ distinct_pci_count < 5  →  HIGH      (PCI inconsistency)
 
 ---
 
-## B6 — Multi-Device IMEI/IMSI Concentration
-
-> **DESIGN FLAW — Requires team review before trusting results.**
-
-**Raw fields read from `measurements`:**
-| Field | Purpose | Schema Status |
-|-------|---------|--------------|
-| `deviceInfo_imei` | Primary device identifier | EXISTS |
-| `deviceInfo_personalId` | Fallback identifier | **DOES NOT EXIST** |
-| `deviceInfo_deviceId` | Second fallback identifier | EXISTS |
-| `cell_eci`, `cell_enb`, `cell_ecgi`, `cell_nci`, `cell_lac`, `cell_cid` | Group key |
-| `network_PLMN`, `network_operator`, `network_iso` | Group key |
-| `timestamp` | Output: first_seen / last_seen |
-| `location_geo_coordinates.1/.2` | Output: map position |
-
-**What it actually measures:**
-```sql
-uniqExact(coalesce(
-    nullIf(deviceInfo_imei,''),
-    nullIf(deviceInfo_personalId,''),   -- field does not exist, always NULL
-    deviceInfo_deviceId
-)) AS device_count
-HAVING device_count ≥ [min_devices]   -- default: 10
-```
-
-**What `device_count` is:** Lifetime total of unique device identifiers ever observed at this cell across the **entire query time window** — not concurrent, not normalized per hour, not compared to any baseline.
-
-**Why this is not a valid anomaly signal:**
-- A cell tower in Tel Aviv center sees hundreds of unique IMEIs per hour legitimately. Over a 30-day window, a single cell easily accumulates tens of thousands of unique devices.
-- A threshold of 10 or even 20 would fire on virtually every cell in any populated area.
-- The metric has no temporal denominator — `device_count = 50` means nothing without knowing whether that's over 10 minutes or 6 months.
-- There is no baseline comparison — the query has no knowledge of what is "normal" for that specific cell.
-
-**What a valid version of this detection would need:**
-- Time-windowed counting: unique devices per hour or per day
-- Baseline comparison: how does today's rate compare to the cell's historical average?
-- Rate-of-new-devices: first-time-seen IMEIs in a short window (not cumulative)
-- Geographic density normalization: urban vs. rural cells have entirely different expected counts
-
-**Severity (current logic — unreliable):**
-```
-device_count > 20  →  CRITICAL
-device_count > 10  →  HIGH
-device_count ≥ 10  →  MEDIUM
-```
-
----
-
-## B7 — TX Power Spike (Device Fighting Jammer)
+## B6 — TX Power Spike (Device Fighting Jammer)
 
 Detects devices transmitting at near-maximum uplink power, consistent with a device trying to overcome local RF interference.
 
@@ -375,7 +334,7 @@ avg_tx_power ≤ 25 dBm  →  HIGH      (Elevated uplink power)
 
 ---
 
-## B8 — GPS Satellite Drop
+## B7 — GPS Satellite Drop
 
 Detects locations where GPS satellite count dropped significantly — consistent with GPS jamming, which frequently accompanies IMSI-catcher deployment.
 
@@ -638,9 +597,8 @@ Response limit: 1–500 alerts (default: 100)
 | B3 | Extreme RSRP | Workbench | `signal_rsrp`, `tech`, `cell_eci` | avg_rsrp ≥ -50 dBm | ≥ -50 dBm | < -50 dBm | — | Functional |
 | B4 | Forced Roaming | Workbench | `network_isRoaming`, `network_mcc` | isRoaming=1 AND home MCC | — | Always | — | Functional |
 | B5 | PCI Mismatch | Workbench | `cell_pci`, `cell_eci` | distinct_pci ≥ 3 | ≥ 5 PCIs | < 5 PCIs | — | Functional |
-| B6 | Multi-Device IMEI | Workbench | `deviceInfo_imei`, `deviceInfo_deviceId`, `cell_eci` | lifetime unique devices ≥ 10 | > 20 | > 10 | ≥ 10 | Logic flaw — see B6 notes |
-| B7 | TX Power Spike | Workbench | `signal_txPower`, `cell_eci`, `tech` | avg_tx > 20 dBm AND count > 5 | > 25 dBm | ≤ 25 dBm | — | Functional |
-| B8 | GPS Satellite Drop | Workbench | `satellites_gps_satellitesNo`, `cell_eci` | satellite_drop ≥ 5 | > 8 | ≥ 4 | < 4 | Functional |
+| B6 | TX Power Spike | Workbench | `signal_txPower`, `cell_eci`, `tech` | avg_tx > 20 dBm AND count > 5 | > 25 dBm | ≤ 25 dBm | — | Functional |
+| B7 | GPS Satellite Drop | Workbench | `satellites_gps_satellitesNo`, `cell_eci` | satellite_drop ≥ 5 | > 8 | ≥ 4 | < 4 | Functional |
 | C1 | PLMN/Country Mismatch | Forensic Report | `network_PLMN`, `network_iso` | iso ≠ MCC country | — | Always | — | Functional |
 | C2 | PLMN/Operator Mismatch | Forensic Report | `network_PLMN`, `network_operator` | opHint ≠ MCC country | — | Always | — | Functional |
 | C3 | Hostile-nation MCC | Forensic Report | `network_PLMN` | Iran/Syria/Iraq MCC | Always | — | — | Functional |
@@ -654,4 +612,4 @@ Response limit: 1–500 alerts (default: 100)
 
 ---
 
-*All thresholds reference: 3GPP TS 24.008, TS 36.331, TS 38.331 | Last updated: 2026-03-12*
+*All thresholds reference: 3GPP TS 24.008, TS 36.331, TS 38.331 | Last updated: 2026-03-18*
