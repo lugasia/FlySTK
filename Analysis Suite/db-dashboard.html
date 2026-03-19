@@ -490,30 +490,31 @@ async function loadDashboard() {
       // KPI: totals
       safe(runQuery(`SELECT
         count() AS total,
-        uniqExact(deviceInfo_deviceId) AS devices,
-        uniqExactIf(cell_ecgi, cell_ecgi IS NOT NULL AND cell_ecgi != '') AS cells,
+        uniq(deviceInfo_deviceId) AS devices,
+        uniqIf(cell_ecgi, cell_ecgi IS NOT NULL AND cell_ecgi != '') AS cells,
         min(timestamp) AS first_seen,
         max(timestamp) AS last_seen
       FROM measurements ${w}`)),
 
-      // KPI: monthly growth (last 3 months, always without time filter for accuracy)
+      // KPI: monthly growth (last 3 months — bounded to 3-month window to avoid full-table scan)
       safe(runQuery(`SELECT
         countIf(toYYYYMM(timestamp) = toYYYYMM(today()))                            AS m0,
         countIf(toYYYYMM(timestamp) = toYYYYMM(today() - INTERVAL 1 MONTH))        AS m1,
         countIf(toYYYYMM(timestamp) = toYYYYMM(today() - INTERVAL 2 MONTH))        AS m2,
         formatDateTime(today(), '%b %Y')                                             AS cur_month,
         formatDateTime(today() - INTERVAL 1 MONTH, '%b %Y')                         AS prev_month
-      FROM measurements`)),
+      FROM measurements
+      WHERE toDate(timestamp) >= toStartOfMonth(today() - INTERVAL 2 MONTH)`)),
 
       // Data Source Breakdown
-      safe(runQuery(`SELECT source, count() AS n, uniqExact(deviceInfo_deviceId) AS users
+      safe(runQuery(`SELECT source, count() AS n, uniq(deviceInfo_deviceId) AS users
         FROM measurements ${w} GROUP BY source ORDER BY n DESC LIMIT 15`)),
 
       // Technology Distribution
       safe(runQuery(`SELECT tech, count() AS n FROM measurements ${w} GROUP BY tech ORDER BY n DESC`)),
 
       // Top Countries
-      safe(runQuery(`SELECT upper(network_iso) AS country, count() AS n, uniqExact(network_operator) AS ops
+      safe(runQuery(`SELECT upper(network_iso) AS country, count() AS n, uniq(network_operator) AS ops
         FROM measurements ${w} GROUP BY country ORDER BY n DESC LIMIT 15`)),
 
       // Top Operators
@@ -526,7 +527,7 @@ async function loadDashboard() {
         round(avg(signal_rsrq),1) AS avg_rsrq,
         round(avg(signal_snr),1)  AS avg_snr,
         count() AS n
-      FROM measurements ${w} WHERE signal_rsrp IS NOT NULL GROUP BY tech ORDER BY n DESC`)),
+      FROM measurements ${w} WHERE signal_rsrp != 0 GROUP BY tech ORDER BY n DESC`)),
 
       // Internet Speed by Operator + Tech
       safe(runQuery(`SELECT network_operator AS operator, tech,
@@ -534,7 +535,7 @@ async function loadDashboard() {
         round(avg(internet_uploadMbps),1)   AS ul,
         round(avg(internet_latency),0)      AS latency,
         count() AS n
-      FROM measurements ${w} WHERE internet_downloadMbps IS NOT NULL
+      FROM measurements ${w} WHERE internet_downloadMbps > 0
       GROUP BY operator, tech ORDER BY n DESC LIMIT 15`)),
 
       // Band Distribution

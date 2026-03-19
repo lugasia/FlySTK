@@ -647,7 +647,7 @@ LIMIT 500;`;
       return               { severity: 'HIGH',     color: '#f59e0b', label: 'Suspicious Signal Strength',       assessment: `RSRP ${v} dBm is abnormally high. May indicate nearby rogue transmitter. Cross-reference with cell database.` };
     },
     generateSQL(p, extras) {
-      const w = buildWhere([`signal_rsrp IS NOT NULL`, `tech IN ('LTE', 'NR')`], extras);
+      const w = buildWhere([`signal_rsrp != 0`, `tech IN ('LTE', 'NR')`], extras);
       return `-- Extreme RSRP Detection\n-- CRITICAL >= -50 dBm: impossible for legitimate tower\nSELECT\n    ${CELL_SEL},\n    network_PLMN, network_operator, network_iso,\n    round(avg(signal_rsrp), 1) AS avg_rsrp,\n    max(signal_rsrp) AS max_rsrp,\n    count() AS counted,\n    min(timestamp) AS first_seen,\n    max(timestamp) AS last_seen,\n    avg(location_geo_coordinates.2) AS lat,\n    avg(location_geo_coordinates.1) AS lon\nFROM measurements\n${w}\nGROUP BY ${CELL_GRP}, network_PLMN, network_operator, network_iso\nHAVING avg_rsrp >= ${p.rsrp_threshold}\nORDER BY avg_rsrp DESC\nLIMIT 500;`;
     }
   },

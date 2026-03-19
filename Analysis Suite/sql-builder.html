@@ -1637,9 +1637,12 @@ async function showGridHeatmap() {
   const geoCol = GEO_COL;
   const timestampCol = TIMESTAMP_COL;
 
-  // Build conditions
+  // Build conditions — bbox pre-filter before expensive pointInPolygon
   let conditions = [];
   polygons.forEach(p => {
+    const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
+    conditions.push(`bin_lat BETWEEN ${(Math.min(...pLats) - 0.01).toFixed(4)} AND ${(Math.max(...pLats) + 0.01).toFixed(4)}`);
+    conditions.push(`bin_lon BETWEEN ${(Math.min(...pLons) - 0.01).toFixed(4)} AND ${(Math.max(...pLons) + 0.01).toFixed(4)}`);
     const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
     const pip = `pointInPolygon(${geoCol}, [${polyPoints}])`;
     conditions.push(p.operation === 'inside' ? pip : `NOT ${pip}`);
@@ -1664,10 +1667,10 @@ async function showGridHeatmap() {
 
   // Grid query: round coords to ~50m cells
   const sql = `SELECT
-    round(tupleElement(${geoCol}, 2) / ${GRID_SIZE_LAT}) * ${GRID_SIZE_LAT} AS grid_lat,
-    round(tupleElement(${geoCol}, 1) / ${GRID_SIZE_LON}) * ${GRID_SIZE_LON} AS grid_lon,
+    round(${geoCol}.2 / ${GRID_SIZE_LAT}) * ${GRID_SIZE_LAT} AS grid_lat,
+    round(${geoCol}.1 / ${GRID_SIZE_LON}) * ${GRID_SIZE_LON} AS grid_lon,
     count() AS samples,
-    uniqExact(coalesce(nullIf(deviceInfo_deviceId, ''), nullIf(deviceInfo_imei, ''))) AS devices
+    uniq(deviceInfo_deviceId) AS devices
 FROM ${tableName}
 WHERE
     ${conditions.join('\n    AND ')}
@@ -2244,7 +2247,7 @@ function getRawContributorsSQL() {
   }
 
   // Always include the unique users count
-  selectCols.push("    uniqExact(coalesce(nullIf(deviceInfo_deviceId, ''), nullIf(deviceInfo_imei, ''))) AS unique_users");
+  selectCols.push("    uniq(deviceInfo_deviceId) AS unique_users");
   selectCols.push('    count() AS total_samples');
   selectCols.push(`    min(${timestampCol}) AS first_contribution`);
   selectCols.push(`    max(${timestampCol}) AS last_contribution`);
@@ -2258,9 +2261,12 @@ function getRawContributorsSQL() {
   conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
   conditions.push('deviceInfo_deviceId IS NOT NULL');
 
-  // Add polygon filters
+  // Add polygon filters with bbox pre-filter
   if (polygons.length > 0) {
     polygons.forEach((p, idx) => {
+      const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
+      conditions.push(`bin_lat BETWEEN ${(Math.min(...pLats) - 0.01).toFixed(4)} AND ${(Math.max(...pLats) + 0.01).toFixed(4)}`);
+      conditions.push(`bin_lon BETWEEN ${(Math.min(...pLons) - 0.01).toFixed(4)} AND ${(Math.max(...pLons) + 0.01).toFixed(4)}`);
       const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
       const pointInPolygon = `pointInPolygon(${geoCol}, [${polyPoints}])`;
       conditions.push(p.operation === 'inside' ? pointInPolygon : `NOT ${pointInPolygon}`);
@@ -2343,6 +2349,12 @@ function getRawSQL() {
   const pointInPolygon = `pointInPolygon(${geoCol}, [${polyPoints}])`;
   const condition = p.operation === 'inside' ? pointInPolygon : `NOT ${pointInPolygon}`;
 
+  // Bounding box pre-filter: bin_lat/bin_lon let ClickHouse skip granules before expensive pointInPolygon
+  const lats = p.coords.map(c => c[0]), lons = p.coords.map(c => c[1]);
+  const bboxPad = 0.01;
+  const bboxLat = `bin_lat BETWEEN ${(Math.min(...lats) - bboxPad).toFixed(4)} AND ${(Math.max(...lats) + bboxPad).toFixed(4)}`;
+  const bboxLon = `bin_lon BETWEEN ${(Math.min(...lons) - bboxPad).toFixed(4)} AND ${(Math.max(...lons) + bboxPad).toFixed(4)}`;
+
   let sql = '';
 
   if (queryType === 'select') {
@@ -2356,8 +2368,8 @@ function getRawSQL() {
     sql += `    any(cell_enb) AS cell_enb,\n`;
     sql += `    min(${timestampCol}) AS first_seen,\n`;
     sql += `    max(${timestampCol}) AS last_seen,\n`;
-    sql += `    tupleElement(${geoCol}, 1) AS longitude,\n`;
-    sql += `    tupleElement(${geoCol}, 2) AS latitude\n`;
+    sql += `    ${geoCol}.1 AS longitude,\n`;
+    sql += `    ${geoCol}.2 AS latitude\n`;
     sql += `FROM ${tableName}\n`;
     sql += `WHERE\n`;
 
@@ -2383,6 +2395,9 @@ function getRawSQL() {
     if (sourceFilterRawSelect) {
       conditions.push(sourceFilterRawSelect);
     }
+    // Bbox pre-filter before expensive pointInPolygon
+    conditions.push(bboxLat);
+    conditions.push(bboxLon);
     conditions.push(condition);
 
     sql += `    ${conditions.join('\n    AND ')}\n`;
@@ -2390,8 +2405,8 @@ function getRawSQL() {
     sql += `    network_PLMN,\n`;
     sql += `    network_operator,\n`;
     sql += `    network_iso,\n`;
-    sql += `    tupleElement(${geoCol}, 1),\n`;
-    sql += `    tupleElement(${geoCol}, 2)\n`;
+    sql += `    ${geoCol}.1,\n`;
+    sql += `    ${geoCol}.2\n`;
     sql += `LIMIT 50000`;
   } else if (queryType === 'tac') {
     // TAC Anomaly Detection query
@@ -2417,10 +2432,10 @@ function getRawSQL() {
     sql += `    min(timestamp) AS first_seen,\n`;
     sql += `    max(timestamp) AS last_seen,\n`;
     sql += `    count() AS total_samples,\n`;
-    sql += `    uniqExact(coalesce(nullIf(deviceInfo_deviceId, ''), nullIf(deviceInfo_imei, ''))) AS unique_devices,\n`;
+    sql += `    uniq(deviceInfo_deviceId) AS unique_devices,\n`;
     sql += `    groupUniqArray(network_operator) AS operator_names,\n`;
-    sql += `    round(avg(tupleElement(location_geo_coordinates, 2)), 6) AS avg_lat,\n`;
-    sql += `    round(avg(tupleElement(location_geo_coordinates, 1)), 6) AS avg_lon\n`;
+    sql += `    round(avg(location_geo_coordinates.2), 6) AS avg_lat,\n`;
+    sql += `    round(avg(location_geo_coordinates.1), 6) AS avg_lon\n`;
     sql += `FROM ${tableName}\n`;
     sql += `WHERE\n`;
 
@@ -2452,6 +2467,9 @@ function getRawSQL() {
     if (sourceFilterRawTac) {
       conditions.push(sourceFilterRawTac);
     }
+    // Bbox pre-filter before expensive pointInPolygon
+    conditions.push(bboxLat);
+    conditions.push(bboxLon);
     conditions.push(condition);
 
     sql += `    ${conditions.join('\n    AND ')}\n`;
@@ -2494,8 +2512,8 @@ function getRawSQL() {
     sql += `    max(signal_rsrp) AS max_rsrp,\n`;
     sql += `    min(timestamp) AS first_seen,\n`;
     sql += `    max(timestamp) AS last_seen,\n`;
-    sql += `    tupleElement(${geoCol}, 1) AS longitude,\n`;
-    sql += `    tupleElement(${geoCol}, 2) AS latitude\n`;
+    sql += `    ${geoCol}.1 AS longitude,\n`;
+    sql += `    ${geoCol}.2 AS latitude\n`;
     sql += `FROM ${tableName}\n`;
     sql += `WHERE\n`;
 
@@ -2506,6 +2524,10 @@ function getRawSQL() {
     // Always apply polygon filter when drawn (unless "search globally" is checked)
     if (hasPolygons && !cellUsePolygon) {
       polygons.forEach((p, idx) => {
+        // Bbox pre-filter: lets ClickHouse skip granules before expensive pointInPolygon
+        const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
+        conditions.push(`bin_lat BETWEEN ${(Math.min(...pLats) - 0.01).toFixed(4)} AND ${(Math.max(...pLats) + 0.01).toFixed(4)}`);
+        conditions.push(`bin_lon BETWEEN ${(Math.min(...pLons) - 0.01).toFixed(4)} AND ${(Math.max(...pLons) + 0.01).toFixed(4)}`);
         const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
         const pointInPolygon = `pointInPolygon(${geoCol}, [${polyPoints}])`;
         conditions.push(p.operation === 'inside' ? pointInPolygon : `NOT ${pointInPolygon}`);
@@ -2556,8 +2578,8 @@ function getRawSQL() {
     sql += `    network_mnc,\n`;
     sql += `    network_PLMN,\n`;
     sql += `    network_operator,\n`;
-    sql += `    tupleElement(${geoCol}, 1),\n`;
-    sql += `    tupleElement(${geoCol}, 2)\n`;
+    sql += `    ${geoCol}.1,\n`;
+    sql += `    ${geoCol}.2\n`;
     sql += `ORDER BY\n`;
     sql += `    cell_enb,\n`;
     sql += `    samples DESC\n`;
@@ -2728,6 +2750,10 @@ function buildContributorsGeoSQL() {
 
   if (polygons.length > 0) {
     polygons.forEach(p => {
+      // Bbox pre-filter before expensive pointInPolygon
+      const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
+      conditions.push(`bin_lat BETWEEN ${(Math.min(...pLats) - 0.01).toFixed(4)} AND ${(Math.max(...pLats) + 0.01).toFixed(4)}`);
+      conditions.push(`bin_lon BETWEEN ${(Math.min(...pLons) - 0.01).toFixed(4)} AND ${(Math.max(...pLons) + 0.01).toFixed(4)}`);
       const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
       const pip = `pointInPolygon(${geoCol}, [${polyPoints}])`;
       conditions.push(p.operation === 'inside' ? pip : `NOT ${pip}`);
@@ -2748,9 +2774,9 @@ function buildContributorsGeoSQL() {
 
   // Grid-based aggregation: round coordinates to ~110m precision for density
   return `SELECT
-    round(tupleElement(${geoCol}, 2), 3) AS lat,
-    round(tupleElement(${geoCol}, 1), 3) AS lon,
-    uniqExact(coalesce(nullIf(deviceInfo_deviceId, ''), nullIf(deviceInfo_imei, ''))) AS unique_users,
+    round(${geoCol}.2, 3) AS lat,
+    round(${geoCol}.1, 3) AS lon,
+    uniq(deviceInfo_deviceId) AS unique_users,
     count() AS samples,
     groupUniqArray(network_operator) AS operators
 FROM ${tableName}
@@ -3177,8 +3203,8 @@ function generateCellSearchSQL() {
   sql += `    <span class="function">max</span>(signal_rsrp) <span class="keyword">AS</span> max_rsrp,\n`;
   sql += `    <span class="function">min</span>(timestamp) <span class="keyword">AS</span> first_seen,\n`;
   sql += `    <span class="function">max</span>(timestamp) <span class="keyword">AS</span> last_seen,\n`;
-  sql += `    <span class="function">tupleElement</span>(${geoCol}, <span class="number">1</span>) <span class="keyword">AS</span> longitude,\n`;
-  sql += `    <span class="function">tupleElement</span>(${geoCol}, <span class="number">2</span>) <span class="keyword">AS</span> latitude\n`;
+  sql += `    ${geoCol}.<span class="number">1</span> <span class="keyword">AS</span> longitude,\n`;
+  sql += `    ${geoCol}.<span class="number">2</span> <span class="keyword">AS</span> latitude\n`;
   sql += `<span class="keyword">FROM</span> ${tableName}\n`;
   sql += `<span class="keyword">WHERE</span>\n`;
 
@@ -3312,7 +3338,7 @@ function generateContributorsSQL() {
   }
 
   // Always include the unique users count
-  selectCols.push(`    <span class="function">uniqExact</span>(<span class="function">coalesce</span>(<span class="function">nullIf</span>(deviceInfo_deviceId, <span class="string">''</span>), <span class="function">nullIf</span>(deviceInfo_imei, <span class="string">''</span>))) <span class="keyword">AS</span> unique_users`);
+  selectCols.push(`    <span class="function">uniq</span>(deviceInfo_deviceId) <span class="keyword">AS</span> unique_users`);
   selectCols.push(`    <span class="function">count</span>() <span class="keyword">AS</span> total_samples`);
   selectCols.push(`    <span class="function">min</span>(${timestampCol}) <span class="keyword">AS</span> first_contribution`);
   selectCols.push(`    <span class="function">max</span>(${timestampCol}) <span class="keyword">AS</span> last_contribution`);
@@ -3431,8 +3457,8 @@ function generateSQL() {
       sql += `    network_operator,\n`;
       sql += `    network_iso,\n`;
       sql += `    <span class="function">count</span>(network_PLMN) <span class="keyword">AS</span> counted,\n`;
-      sql += `    <span class="function">tupleElement</span>(${geoCol}, <span class="number">1</span>) <span class="keyword">AS</span> longitude,\n`;
-      sql += `    <span class="function">tupleElement</span>(${geoCol}, <span class="number">2</span>) <span class="keyword">AS</span> latitude,\n`;
+      sql += `    ${geoCol}.<span class="number">1</span> <span class="keyword">AS</span> longitude,\n`;
+      sql += `    ${geoCol}.<span class="number">2</span> <span class="keyword">AS</span> latitude,\n`;
       sql += `    timestamp\n`;
       sql += `<span class="keyword">FROM</span> ${tableName}\n`;
       sql += `<span class="keyword">WHERE</span>\n`;
@@ -3496,10 +3522,10 @@ function generateSQL() {
       sql += `    <span class="function">min</span>(timestamp) <span class="keyword">AS</span> first_seen,\n`;
       sql += `    <span class="function">max</span>(timestamp) <span class="keyword">AS</span> last_seen,\n`;
       sql += `    <span class="function">count</span>() <span class="keyword">AS</span> total_samples,\n`;
-      sql += `    <span class="function">uniqExact</span>(<span class="function">coalesce</span>(<span class="function">nullIf</span>(deviceInfo_deviceId, <span class="string">''</span>), <span class="function">nullIf</span>(deviceInfo_imei, <span class="string">''</span>))) <span class="keyword">AS</span> unique_devices,\n`;
+      sql += `    <span class="function">uniq</span>(deviceInfo_deviceId) <span class="keyword">AS</span> unique_devices,\n`;
       sql += `    <span class="function">groupUniqArray</span>(network_operator) <span class="keyword">AS</span> operator_names,\n`;
-      sql += `    <span class="function">round</span>(<span class="function">avg</span>(<span class="function">tupleElement</span>(${geoCol}, <span class="number">2</span>)), <span class="number">6</span>) <span class="keyword">AS</span> avg_lat,\n`;
-      sql += `    <span class="function">round</span>(<span class="function">avg</span>(<span class="function">tupleElement</span>(${geoCol}, <span class="number">1</span>)), <span class="number">6</span>) <span class="keyword">AS</span> avg_lon\n`;
+      sql += `    <span class="function">round</span>(<span class="function">avg</span>(${geoCol}.<span class="number">2</span>), <span class="number">6</span>) <span class="keyword">AS</span> avg_lat,\n`;
+      sql += `    <span class="function">round</span>(<span class="function">avg</span>(${geoCol}.<span class="number">1</span>), <span class="number">6</span>) <span class="keyword">AS</span> avg_lon\n`;
       sql += `<span class="keyword">FROM</span> ${tableName}\n`;
       sql += `<span class="keyword">WHERE</span>\n`;
 
@@ -3566,8 +3592,8 @@ function generateSQL() {
       sql += `    <span class="function">count</span>() <span class="keyword">AS</span> samples,\n`;
       sql += `    <span class="function">min</span>(timestamp) <span class="keyword">AS</span> first_seen,\n`;
       sql += `    <span class="function">max</span>(timestamp) <span class="keyword">AS</span> last_seen,\n`;
-      sql += `    <span class="function">tupleElement</span>(${geoCol}, <span class="number">1</span>) <span class="keyword">AS</span> longitude,\n`;
-      sql += `    <span class="function">tupleElement</span>(${geoCol}, <span class="number">2</span>) <span class="keyword">AS</span> latitude\n`;
+      sql += `    ${geoCol}.<span class="number">1</span> <span class="keyword">AS</span> longitude,\n`;
+      sql += `    ${geoCol}.<span class="number">2</span> <span class="keyword">AS</span> latitude\n`;
       sql += `<span class="keyword">FROM</span> ${tableName}\n`;
       sql += `<span class="keyword">WHERE</span>\n`;
 
