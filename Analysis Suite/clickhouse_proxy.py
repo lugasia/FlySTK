@@ -82,8 +82,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 self.send_json_error('Missing credentials')
                 return
 
-            # Build ClickHouse URL
-            url = f'https://{host}/?database={database}&default_format=JSON'
+            # Build ClickHouse URL with performance settings
+            url = f'https://{host}/?database={database}&default_format=JSON&enable_http_compression=1&max_execution_time=300&max_memory_usage=10000000000'
 
             # Create request
             req = urllib.request.Request(url, data=query.encode('utf-8'), method='POST')
@@ -92,6 +92,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             auth_string = base64.b64encode(f'{user}:{password}'.encode()).decode()
             req.add_header('Authorization', f'Basic {auth_string}')
             req.add_header('Content-Type', 'text/plain')
+            req.add_header('Accept-Encoding', 'gzip, deflate')
 
             # Create SSL context (allow self-signed certs if needed)
             ctx = ssl.create_default_context()
