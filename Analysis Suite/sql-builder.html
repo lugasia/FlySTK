@@ -910,14 +910,22 @@
         <div id="cell-options" style="display:none;margin-top:12px;padding:12px;background:var(--dark);border-radius:8px;">
           <p style="font-size:12px;color:var(--sub);margin-bottom:12px;line-height:1.5;">
             <span class="material-icons" style="font-size:14px;vertical-align:middle;color:var(--cyan)">info</span>
-            Leave empty to find <strong style="color:var(--text)">all cells</strong> in the drawn polygon
+            Search <strong style="color:var(--text)">sites</strong> &amp; <strong style="color:var(--text)">site_samples</strong> by MCC, MCC+MNC, or ECI/ECGI
           </p>
 
-          <label class="field">eNB IDs (optional, comma-separated)</label>
-          <textarea id="enb-list" placeholder="Empty = all eNBs in polygon" rows="2" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;resize:vertical;margin-bottom:12px;"></textarea>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <div style="flex:1">
+              <label class="field">MCC</label>
+              <input id="cell-mcc" type="text" placeholder="e.g. 425" maxlength="3" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;">
+            </div>
+            <div style="flex:1">
+              <label class="field">MNC (optional)</label>
+              <input id="cell-mnc" type="text" placeholder="e.g. 01" maxlength="3" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;">
+            </div>
+          </div>
 
-          <label class="field">Cell IDs / ECI (optional, comma-separated)</label>
-          <textarea id="ci-list" placeholder="Empty = all cells in polygon" rows="2" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;resize:vertical;margin-bottom:12px;"></textarea>
+          <label class="field">ECI / ECGI (optional, comma-separated)</label>
+          <textarea id="cell-ecgi-list" placeholder="e.g. 426010001174785, 615030001174017" rows="2" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;resize:vertical;margin-bottom:12px;"></textarea>
 
           <div class="checkbox-row">
             <input type="checkbox" id="cell-use-polygon">
@@ -1662,8 +1670,8 @@ async function showGridHeatmap() {
   const dateFrom = document.getElementById('date-from').value;
   const dateTo = document.getElementById('date-to').value;
 
-  if (excludeMcc && filterMcc) conditions.push(`network_mcc != '${filterMcc}'`);
-  if (includeMcc && includeMccValue) conditions.push(`network_mcc = '${includeMccValue}'`);
+  if (excludeMcc && filterMcc) conditions.push(`network_mcc != ${filterMcc}`);
+  if (includeMcc && includeMccValue) conditions.push(`network_mcc = ${includeMccValue}`);
   if (useTimeline && dateFrom) conditions.push(`${timestampCol} >= toDateTime('${dateFrom} 00:00:00')`);
   if (useTimeline && dateTo) conditions.push(`${timestampCol} <= toDateTime('${dateTo} 23:59:59')`);
   const hourCond = getHourRangeCondition(timestampCol, false);
@@ -2178,7 +2186,6 @@ async function executeSQL() {
         if (btn) btn.disabled = false;
       } else if (queryType === 'cell') {
         renderCellSearchOnMap(result.data);
-        fetchAndOverlaySites(result.data);
       }
 
       // Enable ML analysis button for cell queries
@@ -2287,10 +2294,10 @@ function getRawContributorsSQL() {
 
   // Add MCC filters
   if (excludeMcc && filterMcc) {
-    conditions.push(`network_mcc != '${filterMcc}'`);
+    conditions.push(`network_mcc != ${filterMcc}`);
   }
   if (includeMcc && includeMccValue) {
-    conditions.push(`network_mcc = '${includeMccValue}'`);
+    conditions.push(`network_mcc = ${includeMccValue}`);
   }
 
   // Add timeline filters
@@ -2324,6 +2331,73 @@ function getRawContributorsSQL() {
   return sql;
 }
 
+function getRawCellSearchSQL() {
+  const cellUsePolygon = document.getElementById('cell-use-polygon')?.checked;
+  const mcc = document.getElementById('cell-mcc').value.trim();
+  const mnc = document.getElementById('cell-mnc').value.trim();
+  const ecgiRaw = document.getElementById('cell-ecgi-list').value;
+  const ecgiList = ecgiRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
+
+  const hasPolygons = polygons.length > 0;
+  const hasMcc = /^\d{3}$/.test(mcc);
+  const hasEcgi = ecgiList.length > 0;
+  if (!hasMcc && !hasEcgi && !hasPolygons) return '';
+
+  let sql = '';
+  sql += `SELECT\n`;
+  sql += `    s.site_id,\n`;
+  sql += `    s.lat AS latitude,\n`;
+  sql += `    s.lng AS longitude,\n`;
+  sql += `    s.tech,\n`;
+  sql += `    s.height,\n`;
+  sql += `    s.sectors,\n`;
+  sql += `    splitByChar('_', s.id)[2] AS network_PLMN,\n`;
+  sql += `    splitByChar('-', splitByChar('_', s.id)[2])[1] AS network_mcc,\n`;
+  sql += `    splitByChar('-', splitByChar('_', s.id)[2])[2] AS network_mnc,\n`;
+  sql += `    mapKeys(ss.samples) AS ecgi_list,\n`;
+  sql += `    length(mapKeys(ss.samples)) AS cell_count\n`;
+  sql += `FROM sites AS s\n`;
+  sql += `LEFT JOIN site_samples AS ss ON s.id = ss.id\n`;
+  sql += `WHERE\n`;
+
+  let conditions = [];
+
+  // Polygon filter on sites lat/lng
+  if (hasPolygons && !cellUsePolygon) {
+    polygons.forEach(p => {
+      const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
+      conditions.push(`s.lat BETWEEN ${Math.min(...pLats).toFixed(6)} AND ${Math.max(...pLats).toFixed(6)}`);
+      conditions.push(`s.lng BETWEEN ${Math.min(...pLons).toFixed(6)} AND ${Math.max(...pLons).toFixed(6)}`);
+    });
+  }
+
+  // MCC / MCC+MNC filter
+  if (hasMcc && !hasEcgi) {
+    if (mnc && /^\d{1,3}$/.test(mnc)) {
+      conditions.push(`s.id LIKE '%_${mcc}-${mnc}_%'`);
+    } else {
+      conditions.push(`s.id LIKE '%_${mcc}-%'`);
+    }
+  }
+
+  // ECI/ECGI filter
+  if (hasEcgi) {
+    const ecgiStrs = ecgiList.map(e => `'${e}'`).join(', ');
+    conditions.push(`hasAny(mapKeys(ss.samples), [${ecgiStrs}])`);
+  }
+
+  if (conditions.length === 0) {
+    conditions.push(`1 = 1`);
+  }
+
+  sql += `    ${conditions.join('\n    AND ')}\n`;
+  sql += `ORDER BY\n`;
+  sql += `    cell_count DESC\n`;
+  sql += `LIMIT 5000`;
+
+  return sql;
+}
+
 function getRawSQL() {
   // Generate raw SQL without HTML formatting
   const queryType = document.getElementById('query-type').value;
@@ -2334,9 +2408,12 @@ function getRawSQL() {
     return getRawContributorsSQL();
   }
 
-  // Cell queries may not need a polygon
-  if (polygons.length === 0 && queryType !== 'cell') return '';
-  if (polygons.length === 0 && queryType === 'cell' && cellUsePolygon) return '';
+  // Cell queries use sites + site_samples (no polygon required)
+  if (queryType === 'cell') {
+    return getRawCellSearchSQL();
+  }
+
+  if (polygons.length === 0) return '';
 
   const tableName = TABLE_NAME;
   const geoCol = GEO_COL;
@@ -2383,10 +2460,10 @@ function getRawSQL() {
     // Exclude 'Searching' state (band B0 + PLMN 255-255)
     conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
     if (excludeMcc && filterMcc) {
-      conditions.push(`network_mcc != '${filterMcc}'`);
+      conditions.push(`network_mcc != ${filterMcc}`);
     }
     if (includeMcc && includeMccValue) {
-      conditions.push(`network_mcc = '${includeMccValue}'`);
+      conditions.push(`network_mcc = ${includeMccValue}`);
     }
     if (useTimeline && dateFrom) {
       conditions.push(`${timestampCol} >= toDateTime('${dateFrom} 00:00:00')`);
@@ -2455,10 +2532,10 @@ function getRawSQL() {
       conditions.push(`tech IN (${techs.join(', ')})`);
     }
     if (includeMcc && includeMccValue) {
-      conditions.push(`network_mcc = '${includeMccValue}'`);
+      conditions.push(`network_mcc = ${includeMccValue}`);
     }
     if (excludeMcc && filterMcc) {
-      conditions.push(`network_mcc != '${filterMcc}'`);
+      conditions.push(`network_mcc != ${filterMcc}`);
     }
     if (useTimeline && dateFrom) {
       conditions.push(`${timestampCol} >= toDateTime('${dateFrom} 00:00:00')`);
@@ -2489,107 +2566,6 @@ function getRawSQL() {
     sql += `    distinct_area_count DESC,\n`;
     sql += `    total_samples DESC\n`;
     sql += `LIMIT ${tacLimit}`;
-  } else if (queryType === 'cell') {
-    // Cell/eNB Search query - supports polygon-only or specific IDs
-    const enbListRaw = document.getElementById('enb-list').value;
-    const ciListRaw = document.getElementById('ci-list').value;
-
-    // Parse comma-separated lists
-    const enbList = enbListRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
-    const ciList = ciListRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
-
-    const hasSpecificIds = enbList.length > 0 || ciList.length > 0;
-    const hasPolygons = polygons.length > 0;
-
-    // Need either specific IDs or polygon
-    if (!hasSpecificIds && !hasPolygons) return '';
-
-    sql += `SELECT\n`;
-    sql += `    cell_enb,\n`;
-    sql += `    cell_eci,\n`;
-    sql += `    cell_ci,\n`;
-    sql += `    network_mcc,\n`;
-    sql += `    network_mnc,\n`;
-    sql += `    network_PLMN,\n`;
-    sql += `    network_operator,\n`;
-    sql += `    count() AS samples,\n`;
-    sql += `    avg(signal_rsrp) AS avg_rsrp,\n`;
-    sql += `    min(signal_rsrp) AS min_rsrp,\n`;
-    sql += `    max(signal_rsrp) AS max_rsrp,\n`;
-    sql += `    min(timestamp) AS first_seen,\n`;
-    sql += `    max(timestamp) AS last_seen,\n`;
-    sql += `    ${geoCol}.1 AS longitude,\n`;
-    sql += `    ${geoCol}.2 AS latitude\n`;
-    sql += `FROM ${tableName}\n`;
-    sql += `WHERE\n`;
-
-    let conditions = [];
-    // Exclude 'Searching' state (band B0 + PLMN 255-255)
-    conditions.push(`NOT (band_name = 'B0' AND network_PLMN = '255-255')`);
-
-    // Always apply polygon filter when drawn (unless "search globally" is checked)
-    if (hasPolygons && !cellUsePolygon) {
-      polygons.forEach((p, idx) => {
-        // Bbox pre-filter: lets ClickHouse skip granules before expensive pointInPolygon
-        const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
-        conditions.push(`bin_lat BETWEEN ${(Math.min(...pLats) - 0.01).toFixed(4)} AND ${(Math.max(...pLats) + 0.01).toFixed(4)}`);
-        conditions.push(`bin_lon BETWEEN ${(Math.min(...pLons) - 0.01).toFixed(4)} AND ${(Math.max(...pLons) + 0.01).toFixed(4)}`);
-        const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
-        const pointInPolygon = `pointInPolygon(${geoCol}, [${polyPoints}])`;
-        conditions.push(p.operation === 'inside' ? pointInPolygon : `NOT ${pointInPolygon}`);
-      });
-    }
-
-    // Cell filters (eNB OR ECI) - combined with OR
-    if (hasSpecificIds) {
-      let cellConditions = [];
-      if (enbList.length > 0) {
-        cellConditions.push(`cell_enb IN (${enbList.join(', ')})`);
-      }
-      if (ciList.length > 0) {
-        cellConditions.push(`cell_eci IN (${ciList.join(', ')})`);
-      }
-      if (cellConditions.length > 0) {
-        conditions.push(`(${cellConditions.join(' OR ')})`);
-      }
-    }
-
-    // Other filters (AND)
-    if (excludeMcc && filterMcc) {
-      conditions.push(`network_mcc != '${filterMcc}'`);
-    }
-    if (includeMcc && includeMccValue) {
-      conditions.push(`network_mcc = '${includeMccValue}'`);
-    }
-    if (useTimeline && dateFrom) {
-      conditions.push(`${timestampCol} >= toDateTime('${dateFrom} 00:00:00')`);
-    }
-    if (useTimeline && dateTo) {
-      conditions.push(`${timestampCol} <= toDateTime('${dateTo} 23:59:59')`);
-    }
-    const hourCondCell = getHourRangeCondition(timestampCol, false);
-    if (hourCondCell) conditions.push(hourCondCell);
-    // Add source filter
-    const sourceFilterRawCell = getSourceFilterCondition(false);
-    if (sourceFilterRawCell) {
-      conditions.push(sourceFilterRawCell);
-    }
-
-    sql += `    ${conditions.join('\n    AND ')}\n`;
-    sql += `GROUP BY\n`;
-    sql += `    cell_enb,\n`;
-    sql += `    cell_eci,\n`;
-    sql += `    cell_ci,\n`;
-    sql += `    network_mcc,\n`;
-    sql += `    network_mnc,\n`;
-    sql += `    network_PLMN,\n`;
-    sql += `    network_operator,\n`;
-    sql += `    ${geoCol}.1,\n`;
-    sql += `    ${geoCol}.2\n`;
-    sql += `ORDER BY\n`;
-    sql += `    cell_enb,\n`;
-    sql += `    samples DESC\n`;
-    sql += `LIMIT 50000`;
   }
 
   return sql;
@@ -2769,8 +2745,8 @@ function buildContributorsGeoSQL() {
     const operators = operatorFilter.split(',').map(s => `'${s.trim()}'`).join(', ');
     conditions.push(`network_operator IN (${operators})`);
   }
-  if (excludeMcc && filterMcc) conditions.push(`network_mcc != '${filterMcc}'`);
-  if (includeMcc && includeMccValue) conditions.push(`network_mcc = '${includeMccValue}'`);
+  if (excludeMcc && filterMcc) conditions.push(`network_mcc != ${filterMcc}`);
+  if (includeMcc && includeMccValue) conditions.push(`network_mcc = ${includeMccValue}`);
   if (useTimeline && dateFrom) conditions.push(`${timestampCol} >= toDateTime('${dateFrom} 00:00:00')`);
   if (useTimeline && dateTo) conditions.push(`${timestampCol} <= toDateTime('${dateTo} 23:59:59')`);
   const hourCond = getHourRangeCondition(timestampCol, false);
@@ -3158,129 +3134,79 @@ function clearPolygons() {
 //  SQL GENERATION
 // ════════════════════════════════════════════════════════════════
 
-// Generate Cell/eNB Search SQL - supports polygon filter or specific IDs
+// Generate Cell/eNB Search SQL - queries sites + site_samples tables
 function generateCellSearchSQL() {
-  const tableName = TABLE_NAME;
-  const geoCol = GEO_COL;
-  const excludeMcc = document.getElementById('exclude-mcc').checked;
-  const filterMcc = document.getElementById('filter-mcc').value;
-  const includeMcc = document.getElementById('include-mcc').checked;
-  const includeMccValue = document.getElementById('include-mcc-value').value;
-  const useTimeline = document.getElementById('use-timeline').checked;
-  const timestampCol = TIMESTAMP_COL;
-  const dateFrom = document.getElementById('date-from').value;
-  const dateTo = document.getElementById('date-to').value;
   const usePolygon = document.getElementById('cell-use-polygon')?.checked;
+  const mcc = document.getElementById('cell-mcc').value.trim();
+  const mnc = document.getElementById('cell-mnc').value.trim();
+  const ecgiRaw = document.getElementById('cell-ecgi-list').value;
+  const ecgiList = ecgiRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
 
-  const enbListRaw = document.getElementById('enb-list').value;
-  const ciListRaw = document.getElementById('ci-list').value;
-
-  // Parse comma-separated lists
-  const enbList = enbListRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
-  const ciList = ciListRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
-
-  const hasSpecificIds = enbList.length > 0 || ciList.length > 0;
   const hasPolygons = polygons.length > 0;
+  const hasMcc = /^\d{3}$/.test(mcc);
+  const hasEcgi = ecgiList.length > 0;
+  const hasFilter = hasMcc || hasEcgi;
 
-  // If no IDs and no polygons, show help message
-  if (!hasSpecificIds && !hasPolygons) {
-    let sql = '<span class="comment">-- Cell/eNB Search Query</span>\n';
-    sql += '<span class="comment">-- Draw a polygon to find ALL cells in area,</span>\n';
-    sql += '<span class="comment">-- or enter specific eNB/Cell IDs above</span>\n';
+  // Need at least one filter or polygon
+  if (!hasFilter && !hasPolygons) {
+    let sql = '<span class="comment">-- Cell/eNB Search (sites + site_samples)</span>\n';
+    sql += '<span class="comment">-- Enter MCC, MCC+MNC, or ECI/ECGI values,</span>\n';
+    sql += '<span class="comment">-- or draw a polygon to find all sites in area</span>\n';
     document.getElementById('sql-output').innerHTML = sql;
     return;
   }
 
-  let sql = '<span class="comment">-- Cell/eNB Search Query with RSRP Coverage</span>\n';
-  if (!hasSpecificIds && hasPolygons) {
-    sql = '<span class="comment">-- All Cells in Polygon Area with RSRP Coverage</span>\n';
-  }
+  let sql = '<span class="comment">-- Cell/eNB Search — sites + site_samples</span>\n';
   sql += `<span class="keyword">SELECT</span>\n`;
-  sql += `    cell_enb,\n`;
-  sql += `    cell_eci,\n`;
-  sql += `    cell_ci,\n`;
-  sql += `    network_mcc,\n`;
-  sql += `    network_mnc,\n`;
-  sql += `    network_PLMN,\n`;
-  sql += `    network_operator,\n`;
-  sql += `    <span class="function">count</span>() <span class="keyword">AS</span> samples,\n`;
-  sql += `    <span class="function">avg</span>(signal_rsrp) <span class="keyword">AS</span> avg_rsrp,\n`;
-  sql += `    <span class="function">min</span>(signal_rsrp) <span class="keyword">AS</span> min_rsrp,\n`;
-  sql += `    <span class="function">max</span>(signal_rsrp) <span class="keyword">AS</span> max_rsrp,\n`;
-  sql += `    <span class="function">min</span>(timestamp) <span class="keyword">AS</span> first_seen,\n`;
-  sql += `    <span class="function">max</span>(timestamp) <span class="keyword">AS</span> last_seen,\n`;
-  sql += `    ${geoCol}.<span class="number">1</span> <span class="keyword">AS</span> longitude,\n`;
-  sql += `    ${geoCol}.<span class="number">2</span> <span class="keyword">AS</span> latitude\n`;
-  sql += `<span class="keyword">FROM</span> ${tableName}\n`;
+  sql += `    s.site_id,\n`;
+  sql += `    s.lat <span class="keyword">AS</span> latitude,\n`;
+  sql += `    s.lng <span class="keyword">AS</span> longitude,\n`;
+  sql += `    s.tech,\n`;
+  sql += `    s.height,\n`;
+  sql += `    s.sectors,\n`;
+  sql += `    <span class="function">splitByChar</span>(<span class="string">'_'</span>, s.id)[<span class="number">2</span>] <span class="keyword">AS</span> network_PLMN,\n`;
+  sql += `    <span class="function">splitByChar</span>(<span class="string">'-'</span>, <span class="function">splitByChar</span>(<span class="string">'_'</span>, s.id)[<span class="number">2</span>])[<span class="number">1</span>] <span class="keyword">AS</span> network_mcc,\n`;
+  sql += `    <span class="function">splitByChar</span>(<span class="string">'-'</span>, <span class="function">splitByChar</span>(<span class="string">'_'</span>, s.id)[<span class="number">2</span>])[<span class="number">2</span>] <span class="keyword">AS</span> network_mnc,\n`;
+  sql += `    <span class="function">mapKeys</span>(ss.samples) <span class="keyword">AS</span> ecgi_list,\n`;
+  sql += `    <span class="function">length</span>(<span class="function">mapKeys</span>(ss.samples)) <span class="keyword">AS</span> cell_count\n`;
+  sql += `<span class="keyword">FROM</span> sites <span class="keyword">AS</span> s\n`;
+  sql += `<span class="keyword">LEFT JOIN</span> site_samples <span class="keyword">AS</span> ss <span class="keyword">ON</span> s.id = ss.id\n`;
   sql += `<span class="keyword">WHERE</span>\n`;
 
   let conditions = [];
-  // Exclude 'Searching' state (band B0 + PLMN 255-255)
-  conditions.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
 
-  // Always apply polygon filter when drawn (unless "search globally" is checked)
+  // Polygon filter on sites lat/lng
   if (hasPolygons && !usePolygon) {
-    polygons.forEach((p, idx) => {
-      const polyPoints = p.coords.map(c => `(${c[1].toFixed(8)}, ${c[0].toFixed(8)})`).join(', ');
-      const pointInPolygon = `<span class="function">pointInPolygon</span>(${geoCol}, [${polyPoints}])`;
-      const condition = p.operation === 'inside' ? pointInPolygon : `<span class="keyword">NOT</span> ${pointInPolygon}`;
-      conditions.push(condition);
+    polygons.forEach(p => {
+      const lats = p.coords.map(c => c[0]), lons = p.coords.map(c => c[1]);
+      conditions.push(`s.lat <span class="keyword">BETWEEN</span> <span class="number">${Math.min(...lats).toFixed(6)}</span> <span class="keyword">AND</span> <span class="number">${Math.max(...lats).toFixed(6)}</span>`);
+      conditions.push(`s.lng <span class="keyword">BETWEEN</span> <span class="number">${Math.min(...lons).toFixed(6)}</span> <span class="keyword">AND</span> <span class="number">${Math.max(...lons).toFixed(6)}</span>`);
     });
   }
 
-  // Cell filters (eNB OR ECI) - combined with OR
-  if (hasSpecificIds) {
-    let cellConditions = [];
-    if (enbList.length > 0) {
-      cellConditions.push(`cell_enb <span class="keyword">IN</span> (${enbList.join(', ')})`);
-    }
-    if (ciList.length > 0) {
-      cellConditions.push(`cell_eci <span class="keyword">IN</span> (${ciList.join(', ')})`);
-    }
-    if (cellConditions.length > 0) {
-      conditions.push(`(${cellConditions.join(' <span class="keyword">OR</span> ')})`);
+  // MCC / MCC+MNC filter via id pattern
+  if (hasMcc && !hasEcgi) {
+    if (mnc && /^\d{1,3}$/.test(mnc)) {
+      conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${mcc}-${mnc}_%'</span>`);
+    } else {
+      conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${mcc}-%'</span>`);
     }
   }
 
-  // Add MCC filters
-  if (excludeMcc && filterMcc) {
-    conditions.push(`network_mcc != <span class="string">'${filterMcc}'</span>`);
-  }
-  if (includeMcc && includeMccValue) {
-    conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
+  // ECI/ECGI filter — search in site_samples map keys
+  if (hasEcgi) {
+    const ecgiStrs = ecgiList.map(e => `<span class="string">'${e}'</span>`).join(', ');
+    conditions.push(`<span class="function">hasAny</span>(<span class="function">mapKeys</span>(ss.samples), [${ecgiStrs}])`);
   }
 
-  // Add timeline filters
-  if (useTimeline && dateFrom) {
-    conditions.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
-  }
-  if (useTimeline && dateTo) {
-    conditions.push(`${timestampCol} <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`);
-  }
-  const hourCondCellSearch = getHourRangeCondition(timestampCol, true);
-  if (hourCondCellSearch) conditions.push(hourCondCellSearch);
-
-  // Add source filter
-  const sourceFilter = getSourceFilterCondition(true);
-  if (sourceFilter) {
-    conditions.push(sourceFilter);
+  if (conditions.length === 0) {
+    conditions.push(`<span class="number">1</span> = <span class="number">1</span>`);
   }
 
   sql += `    ${conditions.join('\n    <span class="keyword">AND</span> ')}\n`;
-  sql += `<span class="keyword">GROUP BY</span>\n`;
-  sql += `    cell_enb,\n`;
-  sql += `    cell_eci,\n`;
-  sql += `    cell_ci,\n`;
-  sql += `    network_mcc,\n`;
-  sql += `    network_mnc,\n`;
-  sql += `    network_PLMN,\n`;
-  sql += `    network_operator,\n`;
-  sql += `    longitude,\n`;
-  sql += `    latitude\n`;
   sql += `<span class="keyword">ORDER BY</span>\n`;
-  sql += `    cell_enb,\n`;
-  sql += `    samples <span class="keyword">DESC</span>\n`;
-  sql += `<span class="keyword">LIMIT</span> <span class="number">50000</span>;`;
+  sql += `    cell_count <span class="keyword">DESC</span>\n`;
+  sql += `<span class="keyword">LIMIT</span> <span class="number">5000</span>;`;
 
   document.getElementById('sql-output').innerHTML = sql;
 }
@@ -3375,10 +3301,10 @@ function generateContributorsSQL() {
 
   // Add MCC filters
   if (excludeMcc && filterMcc) {
-    conditions.push(`network_mcc != <span class="string">'${filterMcc}'</span>`);
+    conditions.push(`network_mcc != <span class="number">${filterMcc}</span>`);
   }
   if (includeMcc && includeMccValue) {
-    conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
+    conditions.push(`network_mcc = <span class="number">${includeMccValue}</span>`);
   }
 
   // Add timeline filters
@@ -3416,15 +3342,15 @@ function generateSQL() {
   const queryType = document.getElementById('query-type').value;
   const cellUsePolygon = document.getElementById('cell-use-polygon')?.checked;
 
-  // Cell and Contributors queries don't require a polygon
-  if (polygons.length === 0 && queryType !== 'contributors' && (queryType !== 'cell' || cellUsePolygon)) {
-    document.getElementById('sql-output').innerHTML = '<span class="comment">-- Draw a polygon on the map to generate SQL</span>';
+  // Cell queries always use generateCellSearchSQL (sites + site_samples)
+  if (queryType === 'cell') {
+    generateCellSearchSQL();
     return;
   }
 
-  // For cell queries without polygon, generate SQL directly
-  if (queryType === 'cell' && !cellUsePolygon) {
-    generateCellSearchSQL();
+  // Cell and Contributors queries don't require a polygon
+  if (polygons.length === 0 && queryType !== 'contributors') {
+    document.getElementById('sql-output').innerHTML = '<span class="comment">-- Draw a polygon on the map to generate SQL</span>';
     return;
   }
 
@@ -3474,10 +3400,10 @@ function generateSQL() {
       conditions.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
 
       if (excludeMcc && filterMcc) {
-        conditions.push(`network_mcc != <span class="string">'${filterMcc}'</span>`);
+        conditions.push(`network_mcc != <span class="number">${filterMcc}</span>`);
       }
       if (includeMcc && includeMccValue) {
-        conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
+        conditions.push(`network_mcc = <span class="number">${includeMccValue}</span>`);
       }
       if (useTimeline && dateFrom) {
         conditions.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
@@ -3545,10 +3471,10 @@ function generateSQL() {
         conditions.push(`tech <span class="keyword">IN</span> (${techs.join(', ')})`);
       }
       if (includeMcc && includeMccValue) {
-        conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
+        conditions.push(`network_mcc = <span class="number">${includeMccValue}</span>`);
       }
       if (excludeMcc && filterMcc) {
-        conditions.push(`network_mcc != <span class="string">'${filterMcc}'</span>`);
+        conditions.push(`network_mcc != <span class="number">${filterMcc}</span>`);
       }
       if (useTimeline && dateFrom) {
         conditions.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
@@ -3578,88 +3504,56 @@ function generateSQL() {
       sql += `<span class="keyword">LIMIT</span> <span class="number">${tacLimit}</span>;\n\n`;
 
     } else if (queryType === 'cell') {
-      // Cell/eNB Search query
-      const enbListRaw = document.getElementById('enb-list').value;
-      const ciListRaw = document.getElementById('ci-list').value;
-      const usePolygon = document.getElementById('cell-use-polygon').checked;
-
-      // Parse comma-separated lists
-      const enbList = enbListRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
-      const ciList = ciListRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
+      // Cell/eNB Search query — sites + site_samples (per polygon)
+      const cellMcc = document.getElementById('cell-mcc').value.trim();
+      const cellMnc = document.getElementById('cell-mnc').value.trim();
+      const ecgiRaw = document.getElementById('cell-ecgi-list').value;
+      const ecgiList = ecgiRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
+      const hasCellMcc = /^\d{3}$/.test(cellMcc);
+      const hasEcgi = ecgiList.length > 0;
 
       sql += `<span class="keyword">SELECT</span>\n`;
-      sql += `    cell_enb,\n`;
-      sql += `    cell_eci,\n`;
-      sql += `    cell_ci,\n`;
-      sql += `    network_mcc,\n`;
-      sql += `    network_mnc,\n`;
-      sql += `    network_PLMN,\n`;
-      sql += `    network_operator,\n`;
-      sql += `    <span class="function">count</span>() <span class="keyword">AS</span> samples,\n`;
-      sql += `    <span class="function">min</span>(timestamp) <span class="keyword">AS</span> first_seen,\n`;
-      sql += `    <span class="function">max</span>(timestamp) <span class="keyword">AS</span> last_seen,\n`;
-      sql += `    ${geoCol}.<span class="number">1</span> <span class="keyword">AS</span> longitude,\n`;
-      sql += `    ${geoCol}.<span class="number">2</span> <span class="keyword">AS</span> latitude\n`;
-      sql += `<span class="keyword">FROM</span> ${tableName}\n`;
+      sql += `    s.site_id,\n`;
+      sql += `    s.lat <span class="keyword">AS</span> latitude,\n`;
+      sql += `    s.lng <span class="keyword">AS</span> longitude,\n`;
+      sql += `    s.tech,\n`;
+      sql += `    s.height,\n`;
+      sql += `    s.sectors,\n`;
+      sql += `    <span class="function">splitByChar</span>(<span class="string">'_'</span>, s.id)[<span class="number">2</span>] <span class="keyword">AS</span> network_PLMN,\n`;
+      sql += `    <span class="function">splitByChar</span>(<span class="string">'-'</span>, <span class="function">splitByChar</span>(<span class="string">'_'</span>, s.id)[<span class="number">2</span>])[<span class="number">1</span>] <span class="keyword">AS</span> network_mcc,\n`;
+      sql += `    <span class="function">splitByChar</span>(<span class="string">'-'</span>, <span class="function">splitByChar</span>(<span class="string">'_'</span>, s.id)[<span class="number">2</span>])[<span class="number">2</span>] <span class="keyword">AS</span> network_mnc,\n`;
+      sql += `    <span class="function">mapKeys</span>(ss.samples) <span class="keyword">AS</span> ecgi_list,\n`;
+      sql += `    <span class="function">length</span>(<span class="function">mapKeys</span>(ss.samples)) <span class="keyword">AS</span> cell_count\n`;
+      sql += `<span class="keyword">FROM</span> sites <span class="keyword">AS</span> s\n`;
+      sql += `<span class="keyword">LEFT JOIN</span> site_samples <span class="keyword">AS</span> ss <span class="keyword">ON</span> s.id = ss.id\n`;
       sql += `<span class="keyword">WHERE</span>\n`;
 
       let conditions = [];
 
-      // Cell filters (eNB OR ECI) - combined with OR
-      let cellConditions = [];
-      if (enbList.length > 0) {
-        cellConditions.push(`cell_enb <span class="keyword">IN</span> (${enbList.join(', ')})`);
-      }
-      if (ciList.length > 0) {
-        cellConditions.push(`cell_eci <span class="keyword">IN</span> (${ciList.join(', ')})`);
-      }
-      if (cellConditions.length > 0) {
-        conditions.push(`(${cellConditions.join(' <span class="keyword">OR</span> ')})`);
+      // Bbox from polygon
+      const pLats = p.coords.map(c => c[0]), pLons = p.coords.map(c => c[1]);
+      conditions.push(`s.lat <span class="keyword">BETWEEN</span> <span class="number">${Math.min(...pLats).toFixed(6)}</span> <span class="keyword">AND</span> <span class="number">${Math.max(...pLats).toFixed(6)}</span>`);
+      conditions.push(`s.lng <span class="keyword">BETWEEN</span> <span class="number">${Math.min(...pLons).toFixed(6)}</span> <span class="keyword">AND</span> <span class="number">${Math.max(...pLons).toFixed(6)}</span>`);
+
+      // MCC / MCC+MNC
+      if (hasCellMcc && !hasEcgi) {
+        if (cellMnc && /^\d{1,3}$/.test(cellMnc)) {
+          conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${cellMcc}-${cellMnc}_%'</span>`);
+        } else {
+          conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${cellMcc}-%'</span>`);
+        }
       }
 
-      // Add MCC filters
-      if (excludeMcc && filterMcc) {
-        conditions.push(`network_mcc != <span class="string">'${filterMcc}'</span>`);
-      }
-      if (includeMcc && includeMccValue) {
-        conditions.push(`network_mcc = <span class="string">'${includeMccValue}'</span>`);
-      }
-
-      // Add timeline filters
-      if (useTimeline && dateFrom) {
-        conditions.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
-      }
-      if (useTimeline && dateTo) {
-        conditions.push(`${timestampCol} <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`);
-      }
-      const hourCondCellHtml = getHourRangeCondition(timestampCol, true);
-      if (hourCondCellHtml) conditions.push(hourCondCellHtml);
-
-      // Add polygon filter if enabled
-      if (usePolygon) {
-        conditions.push(`<span class="function">${condition}</span>`);
-      }
-
-      // Must have at least eNB or CI filter
-      if (enbList.length === 0 && ciList.length === 0) {
-        conditions.push(`<span class="comment">-- Enter eNB IDs or Cell IDs above</span>`);
+      // ECGI filter
+      if (hasEcgi) {
+        const ecgiStrs = ecgiList.map(e => `<span class="string">'${e}'</span>`).join(', ');
+        conditions.push(`<span class="function">hasAny</span>(<span class="function">mapKeys</span>(ss.samples), [${ecgiStrs}])`);
       }
 
       sql += `    ${conditions.join('\n    <span class="keyword">AND</span> ')}\n`;
-      sql += `<span class="keyword">GROUP BY</span>\n`;
-      sql += `    cell_enb,\n`;
-      sql += `    cell_eci,\n`;
-      sql += `    cell_ci,\n`;
-      sql += `    network_mcc,\n`;
-      sql += `    network_mnc,\n`;
-      sql += `    network_PLMN,\n`;
-      sql += `    network_operator,\n`;
-      sql += `    longitude,\n`;
-      sql += `    latitude\n`;
       sql += `<span class="keyword">ORDER BY</span>\n`;
-      sql += `    cell_enb,\n`;
-      sql += `    samples <span class="keyword">DESC</span>\n`;
-      sql += `<span class="keyword">LIMIT</span> <span class="number">50000</span>;\n\n`;
+      sql += `    cell_count <span class="keyword">DESC</span>\n`;
+      sql += `<span class="keyword">LIMIT</span> <span class="number">5000</span>;\n\n`;
     }
   });
 
@@ -3677,10 +3571,10 @@ function generateSQL() {
 
     if (excludeMcc && filterMcc) {
       // Always use != for "Exclude MCC" - find signals that are NOT this MCC
-      sql += `\n    <span class="keyword">AND</span> network_mcc != <span class="string">'${filterMcc}'</span>`;
+      sql += `\n    <span class="keyword">AND</span> network_mcc != <span class="number">${filterMcc}</span>`;
     }
     if (includeMcc && includeMccValue) {
-      sql += `\n    <span class="keyword">AND</span> network_mcc = <span class="string">'${includeMccValue}'</span>`;
+      sql += `\n    <span class="keyword">AND</span> network_mcc = <span class="number">${includeMccValue}</span>`;
     }
     if (useTimeline && dateFrom) {
       sql += `\n    <span class="keyword">AND</span> ${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`;
@@ -3866,14 +3760,14 @@ document.addEventListener('DOMContentLoaded', () => {
     contributorsOptions.style.display = queryType === 'contributors' ? 'block' : 'none';
 
     // Show appropriate report/action buttons per query type
-    mlBtnRow.style.display = queryType === 'cell' ? 'flex' : 'none';
+    mlBtnRow.style.display = 'none'; // ML coverage analysis not applicable for sites query
     contributorsReportRow.style.display = queryType === 'contributors' ? 'flex' : 'none';
     mccReportRow.style.display = queryType === 'select' ? 'flex' : 'none';
     tacReportRow.style.display = queryType === 'tac' ? 'flex' : 'none';
   });
 
   // Cell search inputs trigger SQL regeneration
-  ['enb-list', 'ci-list'].forEach(id => {
+  ['cell-mcc', 'cell-mnc', 'cell-ecgi-list'].forEach(id => {
     document.getElementById(id).addEventListener('input', generateSQL);
   });
   document.getElementById('cell-use-polygon').addEventListener('change', generateSQL);
@@ -5113,21 +5007,19 @@ function renderCellSearchOnMap(data) {
   const plmnColorMap = {};
   plmnSet.forEach((p, i) => { plmnColorMap[p] = PLMN_COLORS[i % PLMN_COLORS.length]; });
 
-  const maxSamples = Math.max(...data.map(d => parseInt(d.samples) || 1));
+  const maxCells = Math.max(...data.map(d => parseInt(d.cell_count) || 1));
 
   data.forEach(d => {
     const lat = parseFloat(d.latitude), lon = parseFloat(d.longitude);
     if (isNaN(lat) || isNaN(lon)) return;
     const plmn = d.network_PLMN || 'Unknown';
-    const samples = parseInt(d.samples) || 1;
+    const cellCount = parseInt(d.cell_count) || 0;
     const color = plmnColorMap[plmn];
-    const radius = Math.max(4, Math.min(14, 4 + (samples / maxSamples) * 10));
-    const mcc = (plmn.replace('-', '') || '').slice(0, 3);
+    const radius = Math.max(4, Math.min(14, 4 + (cellCount / maxCells) * 10));
+    const mcc = d.network_mcc || (plmn.replace('-', '') || '').slice(0, 3);
     const mccInfo = typeof MCC_TABLE !== 'undefined' ? MCC_TABLE[mcc] : null;
     const isForeign = mcc !== '425' && mcc !== '000';
     const isCritical = CRITICAL_MCCS.includes(mcc);
-    const avgRsrp = parseFloat(d.avg_rsrp);
-    const rsrpStr = isNaN(avgRsrp) ? '—' : avgRsrp.toFixed(1) + ' dBm';
 
     const marker = L.circleMarker([lat, lon], {
       radius, fillColor: color,
@@ -5137,13 +5029,11 @@ function renderCellSearchOnMap(data) {
     marker.bindPopup(`
       <div style="font-family:Inter,sans-serif;font-size:13px;min-width:200px">
         <div style="font-weight:700;margin-bottom:6px;color:${isCritical ? '#ef4444' : isForeign ? '#f59e0b' : '#3b82f6'}">
-          eNB ${d.cell_enb || '—'} — Cell ${d.cell_eci || d.cell_ci || '—'}
+          Site ${d.site_id || '—'} — ${escapeHtml(d.tech || '—')}
         </div>
         <div><strong>PLMN:</strong> ${escapeHtml(plmn)}${mccInfo ? ' (' + mccInfo.name + ')' : ''}</div>
-        <div><strong>Operator:</strong> ${escapeHtml(d.network_operator || '—')}</div>
-        <div><strong>Samples:</strong> ${samples.toLocaleString()}</div>
-        <div><strong>Avg RSRP:</strong> ${rsrpStr}</div>
-        <div><strong>First Seen:</strong> ${(d.first_seen || '').substring(0, 16)}</div>
+        <div><strong>Cells:</strong> ${cellCount.toLocaleString()}</div>
+        <div><strong>Height:</strong> ${d.height || '—'} m</div>
         <div style="color:#94a3b8;font-size:11px;margin-top:4px">${lat.toFixed(5)}, ${lon.toFixed(5)}</div>
       </div>
     `, { className: 'mcc-popup' });
@@ -5166,27 +5056,24 @@ function showCellSearchDataPanel(data, plmnColorMap) {
   const panel = document.getElementById('map-data-panel');
   const body = document.getElementById('panel-body');
   document.getElementById('panel-title').textContent = 'Cell/eNB Search — Results';
-  document.getElementById('panel-meta').textContent = data.length + ' cells';
+  document.getElementById('panel-meta').textContent = data.length + ' sites';
   body.style.display = '';
   document.getElementById('panel-minimize-btn').textContent = '_';
 
-  let html = '<table><thead><tr><th>eNB</th><th>Cell ECI</th><th>PLMN</th><th>Operator</th><th>Samples</th><th>Avg RSRP</th><th>First Seen</th><th>Coords</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>Site ID</th><th>PLMN</th><th>Tech</th><th>Height</th><th>Cells</th><th>Coords</th></tr></thead><tbody>';
   data.forEach(d => {
     const lat = parseFloat(d.latitude) || 0, lon = parseFloat(d.longitude) || 0;
     const plmn = d.network_PLMN || '';
-    const mcc = (plmn.replace('-', '') || '').slice(0, 3);
+    const mcc = d.network_mcc || (plmn.replace('-', '') || '').slice(0, 3);
     const isCritical = CRITICAL_MCCS.includes(mcc);
     const isForeign = mcc !== '425' && mcc !== '000';
     const cls = isCritical ? 'badge-critical' : isForeign ? 'badge-high' : 'badge-ok';
-    const avgRsrp = parseFloat(d.avg_rsrp);
     html += `<tr onclick="flyToPoint(${lat},${lon},16)" title="Click to fly">
-      <td>${d.cell_enb || '—'}</td>
-      <td>${d.cell_eci || d.cell_ci || '—'}</td>
+      <td>${d.site_id || '—'}</td>
       <td><span class="badge ${cls}">${escapeHtml(plmn)}</span></td>
-      <td>${escapeHtml(d.network_operator || '—')}</td>
-      <td>${(parseInt(d.samples) || 0).toLocaleString()}</td>
-      <td>${isNaN(avgRsrp) ? '—' : avgRsrp.toFixed(1)}</td>
-      <td>${(d.first_seen || '').substring(0, 10)}</td>
+      <td>${escapeHtml(d.tech || '—')}</td>
+      <td>${d.height || '—'}</td>
+      <td>${(parseInt(d.cell_count) || 0).toLocaleString()}</td>
       <td style="color:var(--sub)">${lat.toFixed(4)},${lon.toFixed(4)}</td>
     </tr>`;
   });
