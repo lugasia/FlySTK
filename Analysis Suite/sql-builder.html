@@ -924,6 +924,9 @@
             </div>
           </div>
 
+          <label class="field">eNB / Site ID (optional, comma-separated)</label>
+          <textarea id="cell-enb-list" placeholder="e.g. 53400, 12345" rows="2" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;resize:vertical;margin-bottom:12px;"></textarea>
+
           <label class="field">ECI / ECGI (optional, comma-separated)</label>
           <textarea id="cell-ecgi-list" placeholder="e.g. 426010001174785, 615030001174017" rows="2" style="width:100%;padding:10px 12px;background:var(--navy);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;resize:vertical;margin-bottom:12px;"></textarea>
 
@@ -2335,13 +2338,16 @@ function getRawCellSearchSQL() {
   const cellUsePolygon = document.getElementById('cell-use-polygon')?.checked;
   const mcc = document.getElementById('cell-mcc').value.trim();
   const mnc = document.getElementById('cell-mnc').value.trim();
+  const enbRaw = document.getElementById('cell-enb-list').value;
+  const enbList = enbRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
   const ecgiRaw = document.getElementById('cell-ecgi-list').value;
   const ecgiList = ecgiRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
 
   const hasPolygons = polygons.length > 0;
   const hasMcc = /^\d{3}$/.test(mcc);
+  const hasEnb = enbList.length > 0;
   const hasEcgi = ecgiList.length > 0;
-  if (!hasMcc && !hasEcgi && !hasPolygons) return '';
+  if (!hasMcc && !hasEnb && !hasEcgi && !hasPolygons) return '';
 
   let sql = '';
   sql += `SELECT\n`;
@@ -2372,12 +2378,17 @@ function getRawCellSearchSQL() {
   }
 
   // MCC / MCC+MNC filter
-  if (hasMcc && !hasEcgi) {
+  if (hasMcc && !hasEnb && !hasEcgi) {
     if (mnc && /^\d{1,3}$/.test(mnc)) {
       conditions.push(`s.id LIKE '%_${mcc}-${mnc}_%'`);
     } else {
       conditions.push(`s.id LIKE '%_${mcc}-%'`);
     }
+  }
+
+  // eNB / Site ID filter
+  if (hasEnb) {
+    conditions.push(`s.site_id IN (${enbList.join(', ')})`);
   }
 
   // ECI/ECGI filter
@@ -3139,18 +3150,21 @@ function generateCellSearchSQL() {
   const usePolygon = document.getElementById('cell-use-polygon')?.checked;
   const mcc = document.getElementById('cell-mcc').value.trim();
   const mnc = document.getElementById('cell-mnc').value.trim();
+  const enbRaw = document.getElementById('cell-enb-list').value;
+  const enbList = enbRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
   const ecgiRaw = document.getElementById('cell-ecgi-list').value;
   const ecgiList = ecgiRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
 
   const hasPolygons = polygons.length > 0;
   const hasMcc = /^\d{3}$/.test(mcc);
+  const hasEnb = enbList.length > 0;
   const hasEcgi = ecgiList.length > 0;
-  const hasFilter = hasMcc || hasEcgi;
+  const hasFilter = hasMcc || hasEnb || hasEcgi;
 
   // Need at least one filter or polygon
   if (!hasFilter && !hasPolygons) {
     let sql = '<span class="comment">-- Cell/eNB Search (sites + site_samples)</span>\n';
-    sql += '<span class="comment">-- Enter MCC, MCC+MNC, or ECI/ECGI values,</span>\n';
+    sql += '<span class="comment">-- Enter MCC, MCC+MNC, eNB ID, or ECI/ECGI,</span>\n';
     sql += '<span class="comment">-- or draw a polygon to find all sites in area</span>\n';
     document.getElementById('sql-output').innerHTML = sql;
     return;
@@ -3185,12 +3199,17 @@ function generateCellSearchSQL() {
   }
 
   // MCC / MCC+MNC filter via id pattern
-  if (hasMcc && !hasEcgi) {
+  if (hasMcc && !hasEnb && !hasEcgi) {
     if (mnc && /^\d{1,3}$/.test(mnc)) {
       conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${mcc}-${mnc}_%'</span>`);
     } else {
       conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${mcc}-%'</span>`);
     }
+  }
+
+  // eNB / Site ID filter
+  if (hasEnb) {
+    conditions.push(`s.site_id <span class="keyword">IN</span> (${enbList.join(', ')})`);
   }
 
   // ECI/ECGI filter — search in site_samples map keys
@@ -3507,9 +3526,12 @@ function generateSQL() {
       // Cell/eNB Search query — sites + site_samples (per polygon)
       const cellMcc = document.getElementById('cell-mcc').value.trim();
       const cellMnc = document.getElementById('cell-mnc').value.trim();
+      const cellEnbRaw = document.getElementById('cell-enb-list').value;
+      const cellEnbList = cellEnbRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
       const ecgiRaw = document.getElementById('cell-ecgi-list').value;
       const ecgiList = ecgiRaw.split(',').map(s => s.trim()).filter(s => s && /^\d+$/.test(s));
       const hasCellMcc = /^\d{3}$/.test(cellMcc);
+      const hasCellEnb = cellEnbList.length > 0;
       const hasEcgi = ecgiList.length > 0;
 
       sql += `<span class="keyword">SELECT</span>\n`;
@@ -3536,12 +3558,17 @@ function generateSQL() {
       conditions.push(`s.lng <span class="keyword">BETWEEN</span> <span class="number">${Math.min(...pLons).toFixed(6)}</span> <span class="keyword">AND</span> <span class="number">${Math.max(...pLons).toFixed(6)}</span>`);
 
       // MCC / MCC+MNC
-      if (hasCellMcc && !hasEcgi) {
+      if (hasCellMcc && !hasCellEnb && !hasEcgi) {
         if (cellMnc && /^\d{1,3}$/.test(cellMnc)) {
           conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${cellMcc}-${cellMnc}_%'</span>`);
         } else {
           conditions.push(`s.id <span class="keyword">LIKE</span> <span class="string">'%_${cellMcc}-%'</span>`);
         }
+      }
+
+      // eNB / Site ID filter
+      if (hasCellEnb) {
+        conditions.push(`s.site_id <span class="keyword">IN</span> (${cellEnbList.join(', ')})`);
       }
 
       // ECGI filter
@@ -3767,7 +3794,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Cell search inputs trigger SQL regeneration
-  ['cell-mcc', 'cell-mnc', 'cell-ecgi-list'].forEach(id => {
+  ['cell-mcc', 'cell-mnc', 'cell-enb-list', 'cell-ecgi-list'].forEach(id => {
     document.getElementById(id).addEventListener('input', generateSQL);
   });
   document.getElementById('cell-use-polygon').addEventListener('change', generateSQL);
