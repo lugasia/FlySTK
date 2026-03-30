@@ -903,14 +903,15 @@
           <option value="select">MCC Anomaly</option>
           <option value="cell">Cell/eNB Search</option>
           <option value="tac">TAC Anomaly Detection</option>
+          <option value="bands">Band / EARFCN Survey</option>
           <option value="contributors">User Contributors (Regulator/Operator)</option>
         </select>
 
-        <!-- Table Source (MCC Anomaly only) -->
-        <div id="table-source-options" style="margin-top:12px;padding:12px;background:var(--dark);border-radius:8px;">
-          <label class="field" style="margin-bottom:8px">Query Tables</label>
+        <!-- Table Source toggle (MCC Anomaly + Band Survey) -->
+        <div id="table-source-options" style="margin-top:12px;padding:10px 12px;background:rgba(59,130,246,0.06);border:1px solid var(--accent);border-radius:8px;">
+          <label class="field" style="margin-bottom:6px;color:var(--accent)">Query Tables</label>
           <div class="checkbox-row"><input type="checkbox" id="tbl-measurements" checked><label for="tbl-measurements">measurements</label></div>
-          <div class="checkbox-row"><input type="checkbox" id="tbl-bad-measurements"><label for="tbl-bad-measurements">bad_measurements</label></div>
+          <div class="checkbox-row" style="margin-bottom:0"><input type="checkbox" id="tbl-bad-measurements"><label for="tbl-bad-measurements">bad_measurements</label></div>
         </div>
 
         <!-- Cell/eNB Search options -->
@@ -3501,6 +3502,99 @@ function generateSQL() {
         sql += `<span class="keyword">ORDER BY</span> timestamp;\n\n`;
       }
 
+    } else if (queryType === 'bands') {
+      // Band / EARFCN Survey query
+      if (useMeasurements) {
+        sql += `<span class="comment">-- Band / EARFCN survey (measurements)</span>\n`;
+        sql += `<span class="keyword">SELECT</span>\n`;
+        sql += `    band_name,\n`;
+        sql += `    band_number,\n`;
+        sql += `    band_downlinkEarfcn <span class="keyword">AS</span> earfcn,\n`;
+        sql += `    band_channelNumber,\n`;
+        sql += `    band_bandwidth,\n`;
+        sql += `    band_duplexMode,\n`;
+        sql += `    tech,\n`;
+        sql += `    network_PLMN,\n`;
+        sql += `    network_operator,\n`;
+        sql += `    <span class="function">count</span>() <span class="keyword">AS</span> sample_count,\n`;
+        sql += `    <span class="function">round</span>(<span class="function">avg</span>(signal_rsrp), <span class="number">1</span>) <span class="keyword">AS</span> avg_rsrp,\n`;
+        sql += `    <span class="function">min</span>(signal_rsrp) <span class="keyword">AS</span> min_rsrp,\n`;
+        sql += `    <span class="function">max</span>(signal_rsrp) <span class="keyword">AS</span> max_rsrp,\n`;
+        sql += `    <span class="function">min</span>(timestamp) <span class="keyword">AS</span> first_seen,\n`;
+        sql += `    <span class="function">max</span>(timestamp) <span class="keyword">AS</span> last_seen\n`;
+        sql += `<span class="keyword">FROM</span> ${tableName}\n`;
+        sql += `<span class="keyword">WHERE</span>\n`;
+
+        let bandConds = [];
+        bandConds.push(`<span class="keyword">NOT</span> (band_name = <span class="string">'B0'</span> <span class="keyword">AND</span> network_PLMN = <span class="string">'255-255'</span>)`);
+        bandConds.push(`signal_rsrp != <span class="number">0</span>`);
+        if (excludeMcc && filterMcc) {
+          bandConds.push(`network_mcc != <span class="number">${filterMcc}</span>`);
+        }
+        if (includeMcc && includeMccValue) {
+          bandConds.push(`network_mcc = <span class="number">${includeMccValue}</span>`);
+        }
+        if (useTimeline && dateFrom) {
+          bandConds.push(`${timestampCol} >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
+        }
+        if (useTimeline && dateTo) {
+          bandConds.push(`${timestampCol} <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`);
+        }
+        const hourCondBand = getHourRangeCondition(timestampCol, true);
+        if (hourCondBand) bandConds.push(hourCondBand);
+        const sourceFilterBand = getSourceFilterCondition(true);
+        if (sourceFilterBand) bandConds.push(sourceFilterBand);
+        bandConds.push(`<span class="function">${condition}</span>`);
+
+        sql += `    ${bandConds.join('\n    <span class="keyword">AND</span> ')}\n`;
+        sql += `<span class="keyword">GROUP BY</span>\n`;
+        sql += `    band_name, band_number, earfcn, band_channelNumber,\n`;
+        sql += `    band_bandwidth, band_duplexMode, tech,\n`;
+        sql += `    network_PLMN, network_operator\n`;
+        sql += `<span class="keyword">ORDER BY</span>\n`;
+        sql += `    network_operator, band_number, sample_count <span class="keyword">DESC</span>;\n\n`;
+      }
+
+      // bad_measurements Band / EARFCN query
+      if (useBadMeasurements) {
+        sql += `<span class="comment">-- Band / EARFCN survey (bad_measurements)</span>\n`;
+        sql += `<span class="keyword">SELECT</span>\n`;
+        sql += `    <span class="function">JSONExtractString</span>(raw_record, <span class="string">'band'</span>, <span class="string">'name'</span>) <span class="keyword">AS</span> band_name,\n`;
+        sql += `    <span class="function">JSONExtractInt</span>(raw_record, <span class="string">'band'</span>, <span class="string">'number'</span>) <span class="keyword">AS</span> band_number,\n`;
+        sql += `    <span class="function">JSONExtractInt</span>(raw_record, <span class="string">'band'</span>, <span class="string">'downlinkEarfcn'</span>) <span class="keyword">AS</span> earfcn,\n`;
+        sql += `    <span class="function">JSONExtractString</span>(raw_record, <span class="string">'band'</span>, <span class="string">'duplexMode'</span>) <span class="keyword">AS</span> band_duplexMode,\n`;
+        sql += `    <span class="function">JSONExtractString</span>(raw_record, <span class="string">'tech'</span>) <span class="keyword">AS</span> tech,\n`;
+        sql += `    <span class="function">JSONExtractString</span>(raw_record, <span class="string">'network'</span>, <span class="string">'PLMN'</span>) <span class="keyword">AS</span> network_PLMN,\n`;
+        sql += `    <span class="function">JSONExtractString</span>(raw_record, <span class="string">'network'</span>, <span class="string">'operator'</span>) <span class="keyword">AS</span> network_operator,\n`;
+        sql += `    <span class="function">count</span>() <span class="keyword">AS</span> sample_count,\n`;
+        sql += `    timestamp,\n`;
+        sql += `    reason\n`;
+        sql += `<span class="keyword">FROM</span> bad_measurements\n`;
+        sql += `<span class="keyword">WHERE</span>\n`;
+
+        let badBandConds = [];
+        if (excludeMcc && filterMcc) {
+          badBandConds.push(`<span class="function">JSONExtractString</span>(raw_record, <span class="string">'network'</span>, <span class="string">'mcc'</span>) != <span class="string">'${filterMcc}'</span>`);
+        }
+        if (includeMcc && includeMccValue) {
+          badBandConds.push(`<span class="function">JSONExtractString</span>(raw_record, <span class="string">'network'</span>, <span class="string">'mcc'</span>) = <span class="string">'${includeMccValue}'</span>`);
+        }
+        if (useTimeline && dateFrom) {
+          badBandConds.push(`timestamp >= <span class="function">toDateTime</span>(<span class="string">'${dateFrom} 00:00:00'</span>)`);
+        }
+        if (useTimeline && dateTo) {
+          badBandConds.push(`timestamp <= <span class="function">toDateTime</span>(<span class="string">'${dateTo} 23:59:59'</span>)`);
+        }
+        badBandConds.push(`<span class="function">JSONExtractString</span>(raw_record, <span class="string">'band'</span>, <span class="string">'name'</span>) != <span class="string">''</span>`);
+
+        sql += `    ${badBandConds.join('\n    <span class="keyword">AND</span> ')}\n`;
+        sql += `<span class="keyword">GROUP BY</span>\n`;
+        sql += `    band_name, band_number, earfcn, band_duplexMode,\n`;
+        sql += `    tech, network_PLMN, network_operator,\n`;
+        sql += `    timestamp, reason\n`;
+        sql += `<span class="keyword">ORDER BY</span> timestamp;\n\n`;
+      }
+
     } else if (queryType === 'tac') {
       // TAC Anomaly Detection query
       const minTacChanges = document.getElementById('min-tac-changes').value || '2';
@@ -3644,7 +3738,7 @@ function generateSQL() {
     const pointInPolygon = `pointInPolygon(${geoCol}, [${polyPoints}])`;
     const condition = p.operation === 'inside' ? pointInPolygon : `NOT ${pointInPolygon}`;
 
-    if (useMeasurements || queryType !== 'select') {
+    if (useMeasurements || (queryType !== 'select' && queryType !== 'bands')) {
       sql += `<span class="comment">-- Count affected rows (measurements)</span>\n`;
       sql += `<span class="keyword">SELECT</span> <span class="function">count</span>() <span class="keyword">AS</span> affected_rows\n`;
       sql += `<span class="keyword">FROM</span> ${tableName}\n`;
@@ -3669,7 +3763,7 @@ function generateSQL() {
       sql += `;\n\n`;
     }
 
-    if (useBadMeasurements && queryType === 'select') {
+    if (useBadMeasurements && (queryType === 'select' || queryType === 'bands')) {
       sql += `<span class="comment">-- Count affected rows (bad_measurements)</span>\n`;
       sql += `<span class="keyword">SELECT</span> <span class="function">count</span>() <span class="keyword">AS</span> affected_rows\n`;
       sql += `<span class="keyword">FROM</span> bad_measurements\n`;
@@ -3859,7 +3953,7 @@ document.addEventListener('DOMContentLoaded', () => {
     tacOptions.style.display = queryType === 'tac' ? 'block' : 'none';
     cellOptions.style.display = queryType === 'cell' ? 'block' : 'none';
     contributorsOptions.style.display = queryType === 'contributors' ? 'block' : 'none';
-    document.getElementById('table-source-options').style.display = queryType === 'select' ? 'block' : 'none';
+    document.getElementById('table-source-options').style.display = (queryType === 'select' || queryType === 'bands') ? 'block' : 'none';
 
     // Show appropriate report/action buttons per query type
     mlBtnRow.style.display = 'none'; // ML coverage analysis not applicable for sites query
