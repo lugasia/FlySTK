@@ -1185,6 +1185,12 @@
             Generate Forensic Report
           </button>
         </div>
+        <div class="btn-row" id="bands-report-row" style="margin-top:8px;display:none">
+          <button class="btn" id="bands-report-btn" onclick="generateBandSurveyReport()" disabled style="background:linear-gradient(135deg,#06b6d4,#0891b2);color:#fff;flex:1">
+            <span class="material-icons" style="font-size:18px">cell_tower</span>
+            Generate Band Survey Report
+          </button>
+        </div>
         <div class="btn-row" id="tac-report-row" style="margin-top:8px;display:none">
           <button class="btn" id="tac-report-btn" onclick="generateTacIntelligenceReport()" disabled style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff;flex:1">
             <span class="material-icons" style="font-size:18px">shield</span>
@@ -2199,6 +2205,10 @@ async function executeSQL() {
       } else if (queryType === 'contributors') {
         showContributorsOnMap();
         const btn = document.getElementById('contributors-report-btn');
+        if (btn) btn.disabled = false;
+      } else if (queryType === 'bands') {
+        renderBandSurveyOnMap(result.data);
+        const btn = document.getElementById('bands-report-btn');
         if (btn) btn.disabled = false;
       } else if (queryType === 'cell') {
         renderCellSearchOnMap(result.data);
@@ -4012,10 +4022,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('table-source-options').style.display = (queryType === 'select' || queryType === 'bands') ? 'block' : 'none';
 
     // Show appropriate report/action buttons per query type
-    mlBtnRow.style.display = 'none'; // ML coverage analysis not applicable for sites query
+    mlBtnRow.style.display = 'none';
     contributorsReportRow.style.display = queryType === 'contributors' ? 'flex' : 'none';
     mccReportRow.style.display = queryType === 'select' ? 'flex' : 'none';
     tacReportRow.style.display = queryType === 'tac' ? 'flex' : 'none';
+    document.getElementById('bands-report-row').style.display = queryType === 'bands' ? 'flex' : 'none';
   });
 
   // Table source checkboxes trigger SQL regeneration
@@ -4064,6 +4075,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('tac-report-row').style.display = initQueryType === 'tac' ? 'flex' : 'none';
   document.getElementById('ml-btn-row').style.display = initQueryType === 'cell' ? 'flex' : 'none';
   document.getElementById('contributors-report-row').style.display = initQueryType === 'contributors' ? 'flex' : 'none';
+  document.getElementById('bands-report-row').style.display = initQueryType === 'bands' ? 'flex' : 'none';
 });
 
 
@@ -4189,6 +4201,7 @@ function clearAllVisualizationLayers() {
   closeDataPanel();
   if (mccAnomalyLayer) { map.removeLayer(mccAnomalyLayer); mccAnomalyLayer = null; }
   if (tacAnomalyLayer) { map.removeLayer(tacAnomalyLayer); tacAnomalyLayer = null; }
+  if (bandSurveyLayer) { map.removeLayer(bandSurveyLayer); bandSurveyLayer = null; }
   if (contributorHeatLayer) { map.removeLayer(contributorHeatLayer); contributorHeatLayer = null; }
   if (contributorDotsLayer) { map.removeLayer(contributorDotsLayer); contributorDotsLayer = null; }
   if (cellSearchLayer) { map.removeLayer(cellSearchLayer); cellSearchLayer = null; }
@@ -4204,12 +4217,351 @@ function clearAllVisualizationLayers() {
   const sitesLoadingEl = document.getElementById('sites-loading');
   if (sitesLoadingEl) sitesLoadingEl.remove();
   // Remove legend elements
-  ['mcc-anomaly-legend', 'tac-anomaly-legend', 'contributor-map-legend'].forEach(id => {
+  ['mcc-anomaly-legend', 'tac-anomaly-legend', 'contributor-map-legend', 'band-survey-legend'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.remove();
   });
   mccAnomalyData = null;
   tacAnomalyData = null;
+  bandSurveyData = null;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  BAND / EARFCN SURVEY — MAP VISUALIZATION + REPORT
+// ════════════════════════════════════════════════════════════════
+
+let bandSurveyLayer = null;
+let bandSurveyData = null;
+
+const BAND_COLORS = {
+  'B1': '#ef4444', 'B3': '#f59e0b', 'B7': '#3b82f6', 'B8': '#22c55e',
+  'B20': '#a855f7', 'B28': '#ec4899', 'B38': '#06b6d4', 'B40': '#14b8a6',
+  'B41': '#f97316', 'B66': '#8b5cf6', 'n78': '#e11d48', 'n77': '#0ea5e9',
+  'n41': '#84cc16', 'n258': '#d946ef', 'n257': '#facc15'
+};
+const BAND_COLOR_FALLBACK = [
+  '#ef4444','#f59e0b','#06b6d4','#a855f7','#22c55e','#ec4899','#3b82f6',
+  '#14b8a6','#f97316','#8b5cf6','#64748b','#eab308','#e11d48','#0ea5e9'
+];
+
+function getBandColor(bandName, idx) {
+  return BAND_COLORS[bandName] || BAND_COLOR_FALLBACK[idx % BAND_COLOR_FALLBACK.length];
+}
+
+function renderBandSurveyOnMap(data) {
+  if (bandSurveyLayer) { map.removeLayer(bandSurveyLayer); bandSurveyLayer = null; }
+  const legendEl = document.getElementById('band-survey-legend');
+  if (legendEl) legendEl.remove();
+  if (!data || data.length === 0) return;
+
+  bandSurveyData = data;
+  bandSurveyLayer = L.layerGroup();
+
+  // Aggregate: group by band+operator, collect lat/lon centroids
+  const bandSet = [...new Set(data.map(d => d.band_name || 'Unknown'))].sort();
+  const bandColorMap = {};
+  bandSet.forEach((b, i) => { bandColorMap[b] = getBandColor(b, i); });
+
+  const bandStats = {};
+  data.forEach(d => {
+    const band = d.band_name || 'Unknown';
+    const earfcn = d.earfcn || d.band_downlinkEarfcn || '—';
+    const samples = parseInt(d.sample_count) || 1;
+    if (!bandStats[band]) bandStats[band] = { count: 0, samples: 0, earfcns: new Set(), operators: new Set() };
+    bandStats[band].count++;
+    bandStats[band].samples += samples;
+    bandStats[band].earfcns.add(String(earfcn));
+    bandStats[band].operators.add(d.network_operator || '');
+  });
+
+  // If data has lat/lon (from measurements with geo), place markers
+  // Otherwise create summary-only (no geo in band aggregates by default)
+  const hasGeo = data.some(d => (parseFloat(d.latitude) || parseFloat(d.avg_lat)));
+
+  if (!hasGeo) {
+    // No per-row geo — just show legend + data panel
+    addBandSurveyLegend(bandSet, bandColorMap, bandStats);
+    showBandDataPanel(data);
+    return;
+  }
+
+  const maxSamples = Math.max(...data.map(d => parseInt(d.sample_count) || 1));
+
+  data.forEach(d => {
+    const lat = parseFloat(d.latitude || d.avg_lat);
+    const lon = parseFloat(d.longitude || d.avg_lon);
+    if (isNaN(lat) || isNaN(lon)) return;
+
+    const band = d.band_name || 'Unknown';
+    const color = bandColorMap[band];
+    const samples = parseInt(d.sample_count) || 1;
+    const radius = Math.max(4, Math.min(14, 4 + (samples / maxSamples) * 10));
+
+    const marker = L.circleMarker([lat, lon], {
+      radius,
+      fillColor: color,
+      color: '#fff',
+      weight: 1,
+      opacity: 0.8,
+      fillOpacity: 0.7,
+    });
+
+    marker.bindPopup(`
+      <div style="font-family:Inter,sans-serif;font-size:13px;min-width:240px">
+        <div style="font-weight:700;margin-bottom:6px;color:${color}">
+          ${escapeHtml(band)} ${d.band_number ? '(#' + d.band_number + ')' : ''}
+        </div>
+        <div><strong>EARFCN:</strong> ${escapeHtml(String(d.earfcn || d.band_downlinkEarfcn || '—'))}</div>
+        <div><strong>Tech:</strong> ${escapeHtml(d.tech || '—')}</div>
+        <div><strong>Bandwidth:</strong> ${d.band_bandwidth || '—'} MHz</div>
+        <div><strong>Duplex:</strong> ${escapeHtml(d.band_duplexMode || '—')}</div>
+        <div><strong>PLMN:</strong> ${escapeHtml(d.network_PLMN || '—')} · ${escapeHtml(d.network_operator || '—')}</div>
+        <div><strong>Samples:</strong> ${samples.toLocaleString()}</div>
+        <div><strong>RSRP:</strong> avg ${d.avg_rsrp || '—'} / min ${d.min_rsrp || '—'} / max ${d.max_rsrp || '—'} dBm</div>
+        <div><strong>Period:</strong> ${(d.first_seen || '').substring(0, 16)} — ${(d.last_seen || '').substring(0, 16)}</div>
+        <div style="color:#94a3b8;font-size:11px;margin-top:4px">${lat.toFixed(5)}, ${lon.toFixed(5)}</div>
+      </div>
+    `);
+
+    bandSurveyLayer.addLayer(marker);
+  });
+
+  bandSurveyLayer.addTo(map);
+
+  // Fit bounds
+  const lats = data.map(d => parseFloat(d.latitude || d.avg_lat)).filter(v => !isNaN(v));
+  const lons = data.map(d => parseFloat(d.longitude || d.avg_lon)).filter(v => !isNaN(v));
+  if (lats.length > 0) {
+    map.fitBounds([[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]], { padding: [30, 30] });
+  }
+
+  addBandSurveyLegend(bandSet, bandColorMap, bandStats);
+  showBandDataPanel(data);
+}
+
+function addBandSurveyLegend(bandSet, colorMap, stats) {
+  const existing = document.getElementById('band-survey-legend');
+  if (existing) existing.remove();
+
+  const totalSamples = Object.values(stats).reduce((s, b) => s + b.samples, 0);
+
+  let html = '<div id="band-survey-legend" style="position:absolute;bottom:50px;right:12px;background:rgba(10,22,40,0.92);border:1px solid rgba(59,130,246,0.3);border-radius:12px;padding:14px 16px;z-index:800;min-width:220px;max-height:400px;overflow-y:auto;font-family:Inter,sans-serif;font-size:12px;color:#e2e8f0">';
+  html += '<div style="font-weight:700;margin-bottom:10px;color:#06b6d4;display:flex;align-items:center;gap:6px"><span class="material-icons" style="font-size:16px">cell_tower</span> Band Survey · ' + totalSamples.toLocaleString() + ' samples</div>';
+  bandSet.forEach(b => {
+    const s = stats[b] || { count: 0, samples: 0, earfcns: new Set(), operators: new Set() };
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+    html += '<span style="width:12px;height:12px;border-radius:50%;background:' + colorMap[b] + ';flex-shrink:0"></span>';
+    html += '<span style="flex:1;font-weight:500">' + escapeHtml(b) + '</span>';
+    html += '<span style="color:#94a3b8">' + s.samples.toLocaleString() + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  document.getElementById('map-wrap').insertAdjacentHTML('beforeend', html);
+}
+
+function showBandDataPanel(data) {
+  const panel = document.getElementById('map-data-panel');
+  const body = document.getElementById('panel-body');
+  document.getElementById('panel-title').textContent = 'Band / EARFCN Survey';
+  document.getElementById('panel-meta').textContent = data.length + ' rows';
+  body.style.display = '';
+  document.getElementById('panel-minimize-btn').textContent = '_';
+
+  let html = '<table><thead><tr><th>Band</th><th>#</th><th>EARFCN</th><th>Ch</th><th>BW</th><th>Duplex</th><th>Tech</th><th>PLMN</th><th>Operator</th><th>Samples</th><th>Avg RSRP</th><th>Min</th><th>Max</th><th>First</th><th>Last</th></tr></thead><tbody>';
+  data.forEach(d => {
+    const lat = parseFloat(d.latitude || d.avg_lat) || 0;
+    const lon = parseFloat(d.longitude || d.avg_lon) || 0;
+    const rsrp = parseFloat(d.avg_rsrp) || 0;
+    const rsrpCls = rsrp <= -110 ? 'color:#ef4444' : rsrp <= -100 ? 'color:#f59e0b' : rsrp <= -90 ? 'color:#eab308' : 'color:#22c55e';
+    html += `<tr onclick="flyToPoint(${lat},${lon},14)" title="Click to fly">`;
+    html += `<td style="font-weight:600">${escapeHtml(d.band_name || '—')}</td>`;
+    html += `<td>${d.band_number || ''}</td>`;
+    html += `<td style="font-family:monospace">${d.earfcn || d.band_downlinkEarfcn || ''}</td>`;
+    html += `<td>${d.band_channelNumber || ''}</td>`;
+    html += `<td>${d.band_bandwidth || ''}</td>`;
+    html += `<td>${escapeHtml(d.band_duplexMode || '')}</td>`;
+    html += `<td>${escapeHtml(d.tech || '')}</td>`;
+    html += `<td>${escapeHtml(d.network_PLMN || '')}</td>`;
+    html += `<td>${escapeHtml(d.network_operator || '')}</td>`;
+    html += `<td style="text-align:right">${(parseInt(d.sample_count) || 0).toLocaleString()}</td>`;
+    html += `<td style="text-align:right;${rsrpCls};font-weight:600">${d.avg_rsrp || ''}</td>`;
+    html += `<td style="text-align:right">${d.min_rsrp || ''}</td>`;
+    html += `<td style="text-align:right">${d.max_rsrp || ''}</td>`;
+    html += `<td>${(d.first_seen || '').substring(0, 10)}</td>`;
+    html += `<td>${(d.last_seen || '').substring(0, 10)}</td>`;
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  body.innerHTML = html;
+  panel.classList.add('visible');
+}
+
+function generateBandSurveyReport() {
+  if (!bandSurveyData || bandSurveyData.length === 0) {
+    alert('No band survey data available. Execute a query first.');
+    return;
+  }
+
+  const data = bandSurveyData;
+  const reportDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  // Aggregate by band
+  const bandAgg = {};
+  let totalSamples = 0;
+  const operatorSet = new Set();
+  const techSet = new Set();
+
+  data.forEach(d => {
+    const band = d.band_name || 'Unknown';
+    const samples = parseInt(d.sample_count) || 1;
+    totalSamples += samples;
+    operatorSet.add(d.network_operator || 'Unknown');
+    techSet.add(d.tech || '?');
+
+    if (!bandAgg[band]) {
+      bandAgg[band] = { band, number: d.band_number || '', samples: 0, earfcns: new Set(), operators: new Set(),
+        techs: new Set(), rsrpSum: 0, rsrpCount: 0, minRsrp: 0, maxRsrp: -999,
+        bw: new Set(), duplex: new Set(), firstSeen: d.first_seen, lastSeen: d.last_seen };
+    }
+    const b = bandAgg[band];
+    b.samples += samples;
+    b.earfcns.add(String(d.earfcn || d.band_downlinkEarfcn || ''));
+    b.operators.add(d.network_operator || '');
+    b.techs.add(d.tech || '');
+    if (d.band_bandwidth) b.bw.add(String(d.band_bandwidth));
+    if (d.band_duplexMode) b.duplex.add(d.band_duplexMode);
+    const avgR = parseFloat(d.avg_rsrp);
+    if (!isNaN(avgR) && avgR !== 0) { b.rsrpSum += avgR * samples; b.rsrpCount += samples; }
+    const minR = parseFloat(d.min_rsrp);
+    const maxR = parseFloat(d.max_rsrp);
+    if (!isNaN(minR) && (b.minRsrp === 0 || minR < b.minRsrp)) b.minRsrp = minR;
+    if (!isNaN(maxR) && maxR > b.maxRsrp) b.maxRsrp = maxR;
+    if (d.first_seen && d.first_seen < b.firstSeen) b.firstSeen = d.first_seen;
+    if (d.last_seen && d.last_seen > b.lastSeen) b.lastSeen = d.last_seen;
+  });
+
+  const bands = Object.values(bandAgg).sort((a, b) => b.samples - a.samples);
+
+  // Build report HTML
+  let html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">';
+  html += '<link rel="icon" type="image/png" href="Favicon.png">';
+  html += '<title>Band / EARFCN Survey Report</title>';
+  html += '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">';
+  html += '<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">';
+  html += '<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"><\/script>';
+  html += '<style>';
+  html += ':root{--bg:#0a0a0f;--card:#12121a;--border:#1e1e2e;--text:#e2e8f0;--sub:#64748b;--accent:#3b82f6;--red:#ef4444;--orange:#f59e0b;--cyan:#06b6d4;--green:#22c55e;--purple:#a855f7}';
+  html += '*{margin:0;padding:0;box-sizing:border-box}';
+  html += 'body{font-family:"Inter",sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:40px}';
+  html += '.container{max-width:1200px;margin:0 auto}';
+  html += '.header{text-align:center;margin-bottom:40px;padding-bottom:30px;border-bottom:1px solid var(--border)}';
+  html += '.header h1{font-size:2rem;font-weight:700;margin-bottom:8px;background:linear-gradient(135deg,var(--cyan),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}';
+  html += '.header .subtitle{color:var(--sub);font-size:0.9rem}';
+  html += '.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:20px;margin-bottom:40px}';
+  html += '.kpi-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;text-align:center}';
+  html += '.kpi-card .icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px}';
+  html += '.kpi-value{font-size:2rem;font-weight:700;margin-bottom:4px}';
+  html += '.kpi-label{color:var(--sub);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px}';
+  html += '.section{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:24px}';
+  html += '.section h2{font-size:1.25rem;font-weight:600;margin-bottom:20px;display:flex;align-items:center;gap:10px}';
+  html += '.section h2 .material-icons{color:var(--cyan)}';
+  html += 'table{width:100%;border-collapse:collapse;font-size:0.85rem}';
+  html += 'th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)}';
+  html += 'th{color:var(--sub);font-weight:500;text-transform:uppercase;font-size:0.7rem;letter-spacing:0.5px}';
+  html += '.num{text-align:right;font-family:monospace}';
+  html += '.band-bar{height:8px;border-radius:4px;margin-top:4px}';
+  html += '.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.5px}';
+  html += '.footer{text-align:center;padding-top:30px;margin-top:40px;border-top:1px solid var(--border);color:var(--sub);font-size:0.8rem}';
+  html += '.capture-btn{position:fixed;top:20px;right:20px;background:linear-gradient(135deg,var(--cyan),#0891b2);color:#fff;border:none;padding:12px 20px;border-radius:12px;font-size:0.9rem;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(6,182,212,0.3);z-index:1000}';
+  html += '.capture-btn:hover{transform:translateY(-2px)}.capture-btn:disabled{opacity:0.6;cursor:wait}';
+  html += '@media print{.capture-btn{display:none}}';
+  html += '</style></head><body>';
+
+  // Capture button
+  html += '<button class="capture-btn" onclick="captureReport()" id="capture-btn"><span class="material-icons">photo_camera</span>Capture Screenshot</button>';
+
+  html += '<div class="container">';
+  html += '<header class="header">';
+  html += '<div style="margin-bottom:12px"><span class="badge" style="background:rgba(6,182,212,.15);color:var(--cyan)">RF INTELLIGENCE</span></div>';
+  html += '<h1>Band / EARFCN Survey Report</h1>';
+  html += '<p class="subtitle">Generated on ' + reportDate + '</p>';
+  html += '</header>';
+
+  // KPI Cards
+  html += '<div class="kpi-grid">';
+  html += '<div class="kpi-card"><div class="icon" style="background:rgba(59,130,246,.15);color:var(--accent)"><span class="material-icons">cell_tower</span></div><div class="kpi-value">' + totalSamples.toLocaleString() + '</div><div class="kpi-label">Total Samples</div></div>';
+  html += '<div class="kpi-card"><div class="icon" style="background:rgba(6,182,212,.15);color:var(--cyan)"><span class="material-icons">settings_input_antenna</span></div><div class="kpi-value">' + bands.length + '</div><div class="kpi-label">Unique Bands</div></div>';
+  html += '<div class="kpi-card"><div class="icon" style="background:rgba(34,197,94,.15);color:var(--green)"><span class="material-icons">business</span></div><div class="kpi-value">' + operatorSet.size + '</div><div class="kpi-label">Operators</div></div>';
+  html += '<div class="kpi-card"><div class="icon" style="background:rgba(168,85,247,.15);color:var(--purple)"><span class="material-icons">wifi</span></div><div class="kpi-value">' + techSet.size + '</div><div class="kpi-label">Technologies</div></div>';
+  html += '</div>';
+
+  // Band Distribution
+  html += '<div class="section"><h2><span class="material-icons">bar_chart</span> Band Distribution</h2>';
+  html += '<table><thead><tr><th>Band</th><th>#</th><th>EARFCNs</th><th>BW</th><th>Duplex</th><th>Tech</th><th>Operators</th><th class="num">Samples</th><th class="num">Avg RSRP</th><th class="num">Min</th><th class="num">Max</th><th>Period</th><th>Distribution</th></tr></thead><tbody>';
+  bands.forEach(b => {
+    const avgRsrp = b.rsrpCount > 0 ? (b.rsrpSum / b.rsrpCount).toFixed(1) : '—';
+    const pct = (b.samples / totalSamples * 100).toFixed(1);
+    const color = getBandColor(b.band, 0);
+    const rsrpVal = parseFloat(avgRsrp);
+    const rsrpColor = isNaN(rsrpVal) ? '#94a3b8' : rsrpVal <= -110 ? '#ef4444' : rsrpVal <= -100 ? '#f59e0b' : rsrpVal <= -90 ? '#eab308' : '#22c55e';
+    html += '<tr>';
+    html += '<td style="font-weight:700;color:' + color + '">' + escapeHtml(b.band) + '</td>';
+    html += '<td>' + b.number + '</td>';
+    html += '<td style="font-family:monospace;font-size:0.75rem;max-width:120px;overflow:hidden;text-overflow:ellipsis" title="' + [...b.earfcns].join(', ') + '">' + [...b.earfcns].filter(e => e).slice(0, 5).join(', ') + (b.earfcns.size > 5 ? '…' : '') + '</td>';
+    html += '<td>' + [...b.bw].join('/') + '</td>';
+    html += '<td>' + [...b.duplex].join('/') + '</td>';
+    html += '<td>' + [...b.techs].filter(t => t).join(', ') + '</td>';
+    html += '<td>' + [...b.operators].filter(o => o).join(', ') + '</td>';
+    html += '<td class="num">' + b.samples.toLocaleString() + '</td>';
+    html += '<td class="num" style="color:' + rsrpColor + ';font-weight:600">' + avgRsrp + '</td>';
+    html += '<td class="num">' + (b.minRsrp || '—') + '</td>';
+    html += '<td class="num">' + (b.maxRsrp > -999 ? b.maxRsrp : '—') + '</td>';
+    html += '<td style="font-size:0.75rem">' + (b.firstSeen || '').substring(0, 10) + ' — ' + (b.lastSeen || '').substring(0, 10) + '</td>';
+    html += '<td style="min-width:100px"><div class="band-bar" style="width:' + pct + '%;background:' + color + '"></div><span style="font-size:0.7rem;color:var(--sub)">' + pct + '%</span></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  // Per-operator breakdown
+  const opBands = {};
+  data.forEach(d => {
+    const op = d.network_operator || 'Unknown';
+    const band = d.band_name || '?';
+    const samples = parseInt(d.sample_count) || 1;
+    if (!opBands[op]) opBands[op] = {};
+    if (!opBands[op][band]) opBands[op][band] = 0;
+    opBands[op][band] += samples;
+  });
+
+  html += '<div class="section"><h2><span class="material-icons">people</span> Operator × Band Matrix</h2>';
+  html += '<table><thead><tr><th>Operator</th>';
+  const allBands = [...new Set(data.map(d => d.band_name || '?'))].sort();
+  allBands.forEach(b => { html += '<th class="num">' + escapeHtml(b) + '</th>'; });
+  html += '<th class="num">Total</th></tr></thead><tbody>';
+  Object.keys(opBands).sort().forEach(op => {
+    html += '<tr><td style="font-weight:500">' + escapeHtml(op) + '</td>';
+    let opTotal = 0;
+    allBands.forEach(b => {
+      const v = opBands[op][b] || 0;
+      opTotal += v;
+      html += '<td class="num">' + (v > 0 ? v.toLocaleString() : '<span style="color:#333">—</span>') + '</td>';
+    });
+    html += '<td class="num" style="font-weight:700">' + opTotal.toLocaleString() + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+
+  // Footer
+  html += '<div class="footer">SIGINT Platform — Band / EARFCN Survey Report · ' + reportDate + '</div>';
+  html += '</div>';
+
+  // Capture script
+  html += '<script>function captureReport(){const b=document.getElementById("capture-btn");b.disabled=true;b.innerHTML="<span class=\\"material-icons\\">hourglass_top</span>Capturing...";html2canvas(document.querySelector(".container"),{backgroundColor:"#0a0a0f",scale:2}).then(c=>{const a=document.createElement("a");a.download="band-survey-report.png";a.href=c.toDataURL("image/png");a.click();b.disabled=false;b.innerHTML="<span class=\\"material-icons\\">photo_camera</span>Capture Screenshot"}).catch(e=>{alert("Capture failed: "+e.message);b.disabled=false;b.innerHTML="<span class=\\"material-icons\\">photo_camera</span>Capture Screenshot"})}<\/script>';
+  html += '</body></html>';
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
 }
 
 // ════════════════════════════════════════════════════════════════
